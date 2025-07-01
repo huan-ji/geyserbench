@@ -34,6 +34,7 @@ pub enum EndpointKind {
     Thor,
     Shreder,
     Jetstream,
+    ShredstreamProxy,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
