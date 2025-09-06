@@ -4,20 +4,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use futures_util::{stream::StreamExt, sink::SinkExt};
+use futures_util::{sink::SinkExt, stream::StreamExt};
 use tokio::{sync::broadcast, task};
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
-    geyser::{
-        subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestPing,
-    },
+    geyser::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestPing},
     prelude::SubscribeRequestFilterTransactions,
     tonic::transport::ClientTlsConfig,
 };
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{Comparator, TransactionData, get_current_timestamp, open_log_file, write_log_entry},
+    utils::{get_current_timestamp, open_log_file, write_log_entry, Comparator, TransactionData},
 };
 
 use super::GeyserProvider;
@@ -43,7 +41,7 @@ impl GeyserProvider for YellowstoneProvider {
                 start_time,
                 comparator,
             )
-                .await
+            .await
         })
     }
 }

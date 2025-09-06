@@ -29,6 +29,7 @@ fn main() -> anyhow::Result<()> {
         mpath("proto/events.proto"),
         mpath("proto/publisher.proto"),
         mpath("proto/shredstream.proto"),
+        mpath("proto/shreder.proto"),
         mpath("proto/jetstream.proto"),
     ];
 
@@ -48,8 +49,8 @@ fn main() -> anyhow::Result<()> {
                 .route_name("Subscribe")
                 .client_streaming()
                 .server_streaming()
-                .input_type("crate::providers::arpc::proto::SubscribeRequest")
-                .output_type("crate::providers::arpc::proto::SubscribeResponse")
+                .input_type("crate::providers::arpc::arpc_proto::SubscribeRequest")
+                .output_type("crate::providers::arpc::arpc_proto::SubscribeResponse")
                 .codec_path("tonic::codec::ProstCodec")
                 .build(),
         )
@@ -102,15 +103,42 @@ fn main() -> anyhow::Result<()> {
         .build()]);
     Builder::new().compile(&[Service::builder()
         .name("ShrederService")
-        .package("shredstream")
+        .package("shreder")
         .method(
             Method::builder()
                 .name("subscribe_transactions")
                 .route_name("SubscribeTransactions")
                 .client_streaming()
                 .server_streaming()
-                .input_type("crate::shredstream::SubscribeTransactionsRequest")
-                .output_type("crate::shredstream::SubscribeTransactionsResponse")
+                .input_type("crate::providers::shreder::shreder::SubscribeTransactionsRequest")
+                .output_type("crate::providers::shreder::shreder::SubscribeTransactionsResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .build()]);
+    Builder::new().compile(&[Service::builder()
+        .name("Shredstream")
+        .package("shredstream")
+        .method(
+            Method::builder()
+                .name("SendHeartbeat")
+                .route_name("SendHeartbeat")
+                .input_type("crate::providers::shredstream::shredstream::Heartbeat")
+                .output_type("crate::providers::shredstream::shredstream::HeartbeatResponse")
+                .codec_path("tonic::codec::ProstCodec")
+                .build(),
+        )
+        .build()]);
+    Builder::new().compile(&[Service::builder()
+        .name("ShredstreamProxy")
+        .package("shredstream")
+        .method(
+            Method::builder()
+                .name("SubscribeEntries")
+                .route_name("SubscribeEntries")
+                .server_streaming()
+                .input_type("crate::providers::shredstream::shredstream::SubscribeEntriesRequest")
+                .output_type("crate::providers::shredstream::shredstream::Entry")
                 .codec_path("tonic::codec::ProstCodec")
                 .build(),
         )

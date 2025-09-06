@@ -10,7 +10,7 @@ use tokio_stream::Stream;
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{Comparator, TransactionData, get_current_timestamp, open_log_file, write_log_entry},
+    utils::{get_current_timestamp, open_log_file, write_log_entry, Comparator, TransactionData},
 };
 
 use super::GeyserProvider;
@@ -20,8 +20,7 @@ pub mod arpc_proto {
 }
 
 use arpc_proto::{
-    arpc_service_client::ArpcServiceClient,
-    SubscribeRequest as ArpcSubscribeRequest,
+    arpc_service_client::ArpcServiceClient, SubscribeRequest as ArpcSubscribeRequest,
     SubscribeRequestFilterTransactions,
 };
 
@@ -46,7 +45,7 @@ impl GeyserProvider for ArpcProvider {
                 start_time,
                 comparator,
             )
-                .await
+            .await
         })
     }
 }
