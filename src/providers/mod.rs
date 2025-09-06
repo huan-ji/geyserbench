@@ -2,7 +2,7 @@ use std::{sync::Arc, error::Error};
 use tokio::sync::broadcast;
 
 use crate::{
-    utils::{Comparator, TransactionData},
+    utils::Comparator,
     config::{Config, Endpoint, EndpointKind},
 };
 

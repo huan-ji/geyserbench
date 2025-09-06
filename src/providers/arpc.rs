@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use futures_util::{stream::StreamExt, sink::SinkExt};
+use futures_util::stream::StreamExt;
 use tokio::{sync::broadcast, task};
 use tokio_stream::Stream;
 
@@ -15,16 +15,11 @@ use crate::{
 
 use super::GeyserProvider;
 
-pub mod arpc {
-    #![allow(clippy::clone_on_ref_ptr)]
-    #![allow(clippy::missing_const_for_fn)]
-
+pub mod arpc_proto {
     include!(concat!(env!("OUT_DIR"), "/arpc.rs"));
-
-    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("proto_descriptors");
 }
 
-use arpc::{
+use arpc_proto::{
     arpc_service_client::ArpcServiceClient,
     SubscribeRequest as ArpcSubscribeRequest,
     SubscribeRequestFilterTransactions,
@@ -118,7 +113,13 @@ async fn process_arpc_endpoint(
 
                             write_log_entry(&mut log_file, timestamp, &endpoint.name, &signature)?;
 
-                            let mut comp = comparator.lock().unwrap();
+                            let mut comp = match comparator.lock() {
+                                Ok(g) => g,
+                                Err(e) => {
+                                    log::error!("Comparator mutex poisoned: {}", e);
+                                    e.into_inner()
+                                }
+                            };
 
                             comp.add(
                                 endpoint.name.clone(),
@@ -129,10 +130,10 @@ async fn process_arpc_endpoint(
                                 },
                             );
 
-                            if comp.get_valid_count() == config.transactions as usize {
+                            if comp.get_all_seen_count() >= config.transactions as usize {
                                 log::info!("Endpoint {} shutting down after {} transactions seen and {} by all workers",
                                     endpoint.name, transaction_count, config.transactions);
-                                shutdown_tx.send(()).unwrap();
+                                let _ = shutdown_tx.send(());
                                 break 'ploop;
                             }
 
