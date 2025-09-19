@@ -10,24 +10,23 @@ use crate::{
 use futures_util::stream::StreamExt;
 
 use prost::Message;
-use publisher::{event_publisher_client::EventPublisherClient, StreamResponse};
-use thor_streamer::types::{message_wrapper::EventMessage, MessageWrapper};
 use tokio::{sync::broadcast, task};
 use tonic::{metadata::MetadataValue, transport::Channel, Request, Streaming};
 
 use super::GeyserProvider;
 
+#[allow(clippy::all, dead_code)]
 pub mod thor_streamer {
-    #![allow(clippy::large_enum_variant)]
-
-    pub mod types {
-        include!(concat!(env!("OUT_DIR"), "/thor_streamer.types.rs"));
-    }
+    include!(concat!(env!("OUT_DIR"), "/thor_streamer.types.rs"));
 }
 
+#[allow(clippy::all, dead_code)]
 pub mod publisher {
     include!(concat!(env!("OUT_DIR"), "/publisher.rs"));
 }
+
+use publisher::{event_publisher_client::EventPublisherClient, StreamResponse};
+use thor_streamer::{message_wrapper::EventMessage, MessageWrapper};
 
 pub struct ThorProvider;
 
@@ -94,7 +93,7 @@ async fn process_thor_endpoint(
         .into_inner();
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
             _ = shutdown_rx.recv() => {
                 log::info!("[{}] Received stop signal...", endpoint.name);
                 break;

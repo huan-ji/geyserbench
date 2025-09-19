@@ -1,4 +1,6 @@
+use futures::{channel::mpsc::unbounded, SinkExt};
 use futures_util::stream::StreamExt;
+use solana_pubkey::Pubkey;
 use std::{
     collections::HashMap,
     error::Error,
@@ -13,11 +15,15 @@ use crate::{
 
 use super::GeyserProvider;
 
-pub mod shreder_proto {
-    include!(concat!(env!("OUT_DIR"), "/shreder.rs"));
+#[allow(clippy::all, dead_code)]
+pub mod shreder {
+    include!(concat!(env!("OUT_DIR"), "/shredstream.rs"));
 }
 
-use shreder_proto::shreder_service_client::ShrederServiceClient;
+use shreder::{
+    shreder_service_client::ShrederServiceClient, SubscribeRequestFilterTransactions,
+    SubscribeTransactionsRequest,
+};
 
 pub struct ShrederProvider;
 
@@ -54,6 +60,7 @@ async fn process_shredstream_endpoint(
     comparator: Arc<Mutex<Comparator>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
+    let account_pubkey = config.account.parse::<Pubkey>()?;
 
     let mut log_file = open_log_file(&endpoint.name)?;
 
@@ -66,43 +73,48 @@ async fn process_shredstream_endpoint(
     let mut client = ShrederServiceClient::connect(endpoint.url).await?;
     log::info!("[{}] Connected successfully", endpoint.name);
 
-    let mut transactions: HashMap<String, shreder_proto::SubscribeRequestFilterTransactions> =
-        HashMap::new();
+    let mut transactions: HashMap<String, SubscribeRequestFilterTransactions> =
+        HashMap::with_capacity(1);
     transactions.insert(
         String::from("account"),
-        shreder_proto::SubscribeRequestFilterTransactions {
+        SubscribeRequestFilterTransactions {
             account_exclude: vec![],
             account_include: vec![],
             account_required: vec![config.account.clone()],
         },
     );
 
-    let request = shreder_proto::SubscribeTransactionsRequest { transactions };
-    // Send a single initial request via a stream
-    let in_stream = tokio_stream::iter(vec![request]);
-    let mut stream = client.subscribe_transactions(in_stream).await?.into_inner();
+    let request = SubscribeTransactionsRequest { transactions };
+    let (mut subscribe_tx, subscribe_rx) = unbounded::<shreder::SubscribeTransactionsRequest>();
+    subscribe_tx.send(request).await?;
+    let mut stream = client
+        .subscribe_transactions(subscribe_rx)
+        .await?
+        .into_inner();
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
             _ = shutdown_rx.recv() => {
                 log::info!("[{}] Received stop signal...", endpoint.name);
                 break;
             }
 
             message = stream.next() => {
+                if let Some(message) = message.as_ref() { log::trace!("{:?}", message) };
                 if let Some(Ok(msg)) = message {
                     if let Some(tx_update) = msg.transaction.as_ref() {
                         if let Some(tx) = tx_update.transaction.as_ref() {
                             if let Some(message) = tx.message.as_ref() {
-                                let accounts = message
+                                let has_account = message
                                     .account_keys
                                     .iter()
-                                    .map(|key| bs58::encode(key).into_string())
-                                    .collect::<Vec<String>>();
+                                    .any(|key| key == account_pubkey.as_ref());
 
-                                if accounts.contains(&config.account) {
+                                if has_account {
                                     let timestamp = get_current_timestamp();
-                                    let signature = tx.signatures.first()
+                                    let signature = tx
+                                        .signatures
+                                        .first()
                                         .map(|s| bs58::encode(s).into_string())
                                         .unwrap_or_default();
 
@@ -118,7 +130,11 @@ async fn process_shredstream_endpoint(
 
                                     comp.add(
                                         endpoint.name.clone(),
-                                        TransactionData { timestamp, signature: signature.clone(), start_time },
+                                        TransactionData {
+                                            timestamp,
+                                            signature: signature.clone(),
+                                            start_time,
+                                        },
                                     );
 
                                     if comp.get_all_seen_count() >= config.transactions as usize {

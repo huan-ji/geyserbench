@@ -5,6 +5,8 @@ use std::{
 };
 use tokio::{sync::broadcast, task};
 
+use solana_pubkey::Pubkey;
+
 use crate::{
     config::{Config, Endpoint},
     utils::{get_current_timestamp, open_log_file, write_log_entry, Comparator, TransactionData},
@@ -12,7 +14,8 @@ use crate::{
 
 use super::GeyserProvider;
 
-pub mod shredstream_proto {
+#[allow(clippy::all, dead_code)]
+pub mod shredstream {
     include!(concat!(env!("OUT_DIR"), "/shredstream.rs"));
 }
 
@@ -52,6 +55,8 @@ async fn process_shredstream_endpoint(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
 
+    let account_pubkey = config.account.parse::<Pubkey>()?;
+
     let mut log_file = open_log_file(&endpoint.name)?;
 
     log::info!(
@@ -61,15 +66,15 @@ async fn process_shredstream_endpoint(
     );
 
     let mut client =
-        shredstream_proto::shredstream_proxy_client::ShredstreamProxyClient::connect(endpoint.url)
+        shredstream::shredstream_proxy_client::ShredstreamProxyClient::connect(endpoint.url)
             .await?;
     log::info!("[{}] Connected successfully", endpoint.name);
 
-    let request = shredstream_proto::SubscribeEntriesRequest {};
+    let request = shredstream::SubscribeEntriesRequest {};
     let mut stream = client.subscribe_entries(request).await?.into_inner();
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
         _ = shutdown_rx.recv() => {
             log::info!("[{}] Received stop signal...", endpoint.name);
             break;
@@ -85,47 +90,49 @@ async fn process_shredstream_endpoint(
                     continue;
                 }
             };
-
             for entry in entries {
-            for tx in entry.transactions {
-                    let accounts = tx.message.static_account_keys()
+                for tx in entry.transactions {
+                    let has_account = tx
+                        .message
+                        .static_account_keys()
                         .iter()
-                        .map(|key| bs58::encode(key).into_string())
-                        .collect::<Vec<String>>();
+                        .any(|key| key == &account_pubkey);
 
-                    if accounts.contains(&config.account) {
-                        let timestamp = get_current_timestamp();
-                        let signature = bs58::encode(&tx.signatures[0]).into_string();
-
-                        write_log_entry(&mut log_file, timestamp, &endpoint.name, &signature)?;
-
-                        let mut comp = match comparator.lock() {
-                            Ok(g) => g,
-                            Err(e) => {
-                                log::error!("Comparator mutex poisoned: {}", e);
-                                e.into_inner()
-                            }
-                        };
-
-                        comp.add(
-                            endpoint.name.clone(),
-                            TransactionData {
-                                timestamp,
-                                signature: signature.clone(),
-                                start_time,
-                            },
-                        );
-
-                        if comp.get_all_seen_count() >= config.transactions as usize {
-                            log::info!("Endpoint {} shutting down after {} transactions seen and {} by all workers",
-                                endpoint.name, transaction_count, config.transactions);
-                            let _ = shutdown_tx.send(());
-                            break 'ploop;
-                        }
-
-                        log::info!("[{:.3}] [{}] {}", timestamp, endpoint.name, signature);
-                        transaction_count += 1;
+                    if !has_account {
+                        continue;
                     }
+
+                    let timestamp = get_current_timestamp();
+                    let signature = tx.signatures[0].to_string();
+
+                    write_log_entry(&mut log_file, timestamp, &endpoint.name, &signature)?;
+
+                    let mut comp = match comparator.lock() {
+                        Ok(g) => g,
+                        Err(e) => {
+                            log::error!("Comparator mutex poisoned: {}", e);
+                            e.into_inner()
+                        }
+                    };
+
+                    comp.add(
+                        endpoint.name.clone(),
+                        TransactionData {
+                            timestamp,
+                            signature: signature.clone(),
+                            start_time,
+                        },
+                    );
+
+                    if comp.get_all_seen_count() >= config.transactions as usize {
+                        log::info!("Endpoint {} shutting down after {} transactions seen and {} by all workers",
+                            endpoint.name, transaction_count, config.transactions);
+                        let _ = shutdown_tx.send(());
+                        break 'ploop;
+                    }
+
+                    log::info!("[{:.3}] [{}] {}", timestamp, endpoint.name, signature);
+                    transaction_count += 1;
                 }
             }
             }
