@@ -5,6 +5,7 @@ use std::{
 };
 
 use futures_util::{sink::SinkExt, stream::StreamExt};
+use solana_pubkey::Pubkey;
 use tokio::{sync::broadcast, task};
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
@@ -55,6 +56,8 @@ async fn process_yellowstone_endpoint(
     comparator: Arc<Mutex<Comparator>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
+
+    let account_pubkey = config.account.parse::<Pubkey>()?;
 
     let mut log_file = open_log_file(&endpoint.name)?;
 
@@ -116,13 +119,12 @@ async fn process_yellowstone_endpoint(
                             Some(UpdateOneof::Transaction(tx_msg)) => {
                                 if let Some(tx) = tx_msg.transaction.as_ref() {
                                     if let Some(msg) = tx.transaction.as_ref().and_then(|t| t.message.as_ref()) {
-                                        let accounts = msg
+                                        let has_account = msg
                                             .account_keys
                                             .iter()
-                                            .map(|key| bs58::encode(key).into_string())
-                                            .collect::<Vec<String>>();
+                                            .any(|key| key.as_slice() == account_pubkey.as_ref());
 
-                                        if accounts.contains(&config.account) {
+                                        if has_account {
                                             let timestamp = get_current_timestamp();
                                             let signature = match tx.transaction.as_ref()
                                                 .and_then(|t| t.signatures.first()) {

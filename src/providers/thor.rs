@@ -10,6 +10,7 @@ use crate::{
 use futures_util::stream::StreamExt;
 
 use prost::Message;
+use solana_pubkey::Pubkey;
 use tokio::{sync::broadcast, task};
 use tonic::{metadata::MetadataValue, transport::Channel, Request, Streaming};
 
@@ -64,6 +65,8 @@ async fn process_thor_endpoint(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
 
+    let account_pubkey = config.account.parse::<Pubkey>()?;
+
     let mut log_file = open_log_file(&endpoint.name)?;
 
     log::info!(
@@ -106,12 +109,12 @@ async fn process_thor_endpoint(
                             if let Some(transaction_event) = transaction_event_wrapper.transaction {
                                 if let Some(transaction) = transaction_event.transaction.as_ref() {
                                     if let Some(message) = transaction.message.as_ref() {
-                                        let accounts: Vec<String> = message.account_keys
+                                        let has_account = message
+                                            .account_keys
                                             .iter()
-                                            .map(|key| bs58::encode(key).into_string())
-                                            .collect();
+                                            .any(|key| key.as_slice() == account_pubkey.as_ref());
 
-                                        if accounts.contains(&config.account) {
+                                        if has_account {
                                             let timestamp = get_current_timestamp();
                                             let signature = bs58::encode(&transaction_event.signature).into_string();
 

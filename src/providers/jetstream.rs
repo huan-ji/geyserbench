@@ -1,4 +1,6 @@
+use futures::{channel::mpsc::unbounded, SinkExt};
 use futures_util::stream::StreamExt;
+use solana_pubkey::Pubkey;
 use std::{
     collections::HashMap,
     error::Error,
@@ -56,6 +58,8 @@ async fn process_jetstream_endpoint(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
 
+    let account_pubkey = config.account.parse::<Pubkey>()?;
+
     let mut log_file = open_log_file(&endpoint.name)?;
 
     log::info!(
@@ -84,10 +88,10 @@ async fn process_jetstream_endpoint(
         ping: None,
     };
 
-    let mut stream = client
-        .subscribe(tokio_stream::iter(vec![request]))
-        .await?
-        .into_inner();
+    let (mut subscribe_tx, subscribe_rx) = unbounded::<jetstream::SubscribeRequest>();
+    subscribe_tx.send(request).await?;
+
+    let mut stream = client.subscribe(subscribe_rx).await?.into_inner();
 
     'ploop: loop {
         tokio::select! { biased;
@@ -100,12 +104,12 @@ async fn process_jetstream_endpoint(
                 if let Some(Ok(msg)) = message {
                     if let Some(jetstream::subscribe_update::UpdateOneof::Transaction(tx)) = msg.update_oneof {
                         if let Some(tx_info) = &tx.transaction {
-                            let account_keys = tx_info.account_keys
+                            let has_account = tx_info
+                                .account_keys
                                 .iter()
-                                .map(|key| bs58::encode(key).into_string())
-                                .collect::<Vec<String>>();
+                                .any(|key| key.as_slice() == account_pubkey.as_ref());
 
-                            if account_keys.contains(&config.account) {
+                            if has_account {
                                 let timestamp = get_current_timestamp();
                                 let signature = bs58::encode(&tx_info.signature).into_string();
 
