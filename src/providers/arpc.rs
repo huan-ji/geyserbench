@@ -4,9 +4,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use futures::{channel::mpsc::unbounded, SinkExt};
 use futures_util::stream::StreamExt;
+use solana_pubkey::Pubkey;
 use tokio::{sync::broadcast, task};
-use tokio_stream::Stream;
 
 use crate::{
     config::{Config, Endpoint},
@@ -61,6 +62,8 @@ async fn process_arpc_endpoint(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut transaction_count = 0;
 
+    let account_pubkey = config.account.parse::<Pubkey>()?;
+
     let mut log_file = open_log_file(&endpoint.name)?;
 
     log::info!(
@@ -72,24 +75,24 @@ async fn process_arpc_endpoint(
     let mut client = ArpcServiceClient::connect(endpoint.url).await?;
     log::info!("[{}] Connected successfully", endpoint.name);
 
-    fn reqstream(account: String) -> impl Stream<Item = ArpcSubscribeRequest> {
-        let mut transactions = HashMap::new();
-        transactions.insert(
-            String::from("account"),
-            SubscribeRequestFilterTransactions {
-                account_include: vec![account],
-                account_exclude: vec![],
-                account_required: vec![],
-            },
-        );
-        tokio_stream::iter(vec![ArpcSubscribeRequest {
-            transactions,
-            ping_id: Some(0),
-        }])
-    }
+    let mut transactions = HashMap::new();
+    transactions.insert(
+        String::from("account"),
+        SubscribeRequestFilterTransactions {
+            account_include: vec![config.account.clone()],
+            account_exclude: vec![],
+            account_required: vec![],
+        },
+    );
 
-    let in_stream = reqstream(config.account.clone());
-    let mut stream = client.subscribe(in_stream).await?.into_inner();
+    let request = ArpcSubscribeRequest {
+        transactions,
+        ping_id: Some(0),
+    };
+
+    let (mut subscribe_tx, subscribe_rx) = unbounded::<ArpcSubscribeRequest>();
+    subscribe_tx.send(request).await?;
+    let mut stream = client.subscribe(subscribe_rx).await?.into_inner();
 
     'ploop: loop {
         tokio::select! { biased;
@@ -101,12 +104,12 @@ async fn process_arpc_endpoint(
             message = stream.next() => {
                 if let Some(Ok(msg)) = message {
                     if let Some(tx) = msg.transaction {
-                        let accounts = tx.account_keys
+                        let has_account = tx
+                            .account_keys
                             .iter()
-                            .map(|key| bs58::encode(key).into_string())
-                            .collect::<Vec<String>>();
+                            .any(|key| key.as_slice() == account_pubkey.as_ref());
 
-                        if accounts.contains(&config.account) {
+                        if has_account {
                             let timestamp = get_current_timestamp();
                             let signature = bs58::encode(&tx.signatures[0]).into_string();
 
