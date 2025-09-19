@@ -15,11 +15,12 @@ use crate::{
 
 use super::GeyserProvider;
 
-pub mod arpc_proto {
+#[allow(clippy::all, dead_code)]
+pub mod arpc {
     include!(concat!(env!("OUT_DIR"), "/arpc.rs"));
 }
 
-use arpc_proto::{
+use arpc::{
     arpc_service_client::ArpcServiceClient, SubscribeRequest as ArpcSubscribeRequest,
     SubscribeRequestFilterTransactions,
 };
@@ -88,11 +89,10 @@ async fn process_arpc_endpoint(
     }
 
     let in_stream = reqstream(config.account.clone());
-
     let mut stream = client.subscribe(in_stream).await?.into_inner();
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
             _ = shutdown_rx.recv() => {
                 log::info!("[{}] Received stop signal...", endpoint.name);
                 break;

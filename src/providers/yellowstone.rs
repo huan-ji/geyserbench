@@ -103,7 +103,7 @@ async fn process_yellowstone_endpoint(
         .await?;
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
             _ = shutdown_rx.recv() => {
                 log::info!("[{}] Received stop signal...", endpoint.name);
                 break;

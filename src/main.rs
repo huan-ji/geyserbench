@@ -55,10 +55,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    tokio::spawn(async move {
-        if (ctrl_c().await).is_ok() {
-            println!("\nReceived Ctrl+C signal. Shutting down...");
-            let _ = shutdown_tx.send(());
+    tokio::spawn({
+        let shutdown_tx = shutdown_tx.clone();
+        async move {
+            match ctrl_c().await {
+                Ok(()) => {
+                    log::info!("Received Ctrl+C signal; initiating shutdown");
+                    let _ = shutdown_tx.send(());
+                }
+                Err(err) => log::error!("Failed to listen for Ctrl+C: {}", err),
+            }
         }
     });
 

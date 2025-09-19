@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::{sync::broadcast, task};
-use tokio_stream::Stream;
 
 use crate::{
     config::{Config, Endpoint},
@@ -14,11 +13,12 @@ use crate::{
 
 use super::GeyserProvider;
 
-pub mod jetstream_proto {
+#[allow(clippy::all, dead_code)]
+pub mod jetstream {
     include!(concat!(env!("OUT_DIR"), "/jetstream.rs"));
 }
 
-use jetstream_proto::jetstream_client::JetstreamClient;
+use jetstream::jetstream_client::JetstreamClient;
 
 pub struct JetstreamProvider;
 
@@ -67,33 +67,30 @@ async fn process_jetstream_endpoint(
     let mut client = JetstreamClient::connect(endpoint.url).await?;
     log::info!("[{}] Connected successfully", endpoint.name);
 
-    let mut transactions: HashMap<String, jetstream_proto::SubscribeRequestFilterTransactions> =
+    let mut transactions: HashMap<String, jetstream::SubscribeRequestFilterTransactions> =
         HashMap::new();
     transactions.insert(
         String::from("account"),
-        jetstream_proto::SubscribeRequestFilterTransactions {
+        jetstream::SubscribeRequestFilterTransactions {
             account_exclude: vec![],
             account_include: vec![],
             account_required: vec![config.account.clone()],
         },
     );
 
-    let request = jetstream_proto::SubscribeRequest {
+    let request = jetstream::SubscribeRequest {
         transactions,
         accounts: HashMap::new(),
         ping: None,
     };
 
-    fn reqstream(
-        req: jetstream_proto::SubscribeRequest,
-    ) -> impl Stream<Item = jetstream_proto::SubscribeRequest> {
-        tokio_stream::iter(vec![req])
-    }
-
-    let mut stream = client.subscribe(reqstream(request)).await?.into_inner();
+    let mut stream = client
+        .subscribe(tokio_stream::iter(vec![request]))
+        .await?
+        .into_inner();
 
     'ploop: loop {
-        tokio::select! {
+        tokio::select! { biased;
             _ = shutdown_rx.recv() => {
                 log::info!("[{}] Received stop signal...", endpoint.name);
                 break;
@@ -101,7 +98,7 @@ async fn process_jetstream_endpoint(
 
             message = stream.next() => {
                 if let Some(Ok(msg)) = message {
-                    if let Some(jetstream_proto::subscribe_update::UpdateOneof::Transaction(tx)) = msg.update_oneof {
+                    if let Some(jetstream::subscribe_update::UpdateOneof::Transaction(tx)) = msg.update_oneof {
                         if let Some(tx_info) = &tx.transaction {
                             let account_keys = tx_info.account_keys
                                 .iter()
