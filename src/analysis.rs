@@ -1,5 +1,17 @@
 use crate::utils::{percentile, Comparator, TransactionData};
-use comfy_table::{presets::UTF8_FULL, ContentArrangement, Table};
+use comfy_table::{ContentArrangement, Table};
+
+#[cfg(target_os = "windows")]
+#[inline]
+fn table_preset() -> &'static str {
+    comfy_table::presets::ASCII_FULL
+}
+
+#[cfg(not(target_os = "windows"))]
+#[inline]
+fn table_preset() -> &'static str {
+    comfy_table::presets::UTF8_FULL
+}
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -86,7 +98,7 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
     });
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_preset(table_preset());
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
         "Endpoint",

@@ -59,7 +59,8 @@ pub fn percentile(sorted_data: &[f64], p: f64) -> f64 {
 }
 
 pub fn open_log_file(name: &str) -> std::io::Result<impl Write> {
-    let log_filename = format!("transaction_log_{}.txt", name);
+    let safe_name = sanitize_filename(name);
+    let log_filename = format!("transaction_log_{}.txt", safe_name);
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -74,4 +75,22 @@ pub fn write_log_entry(
 ) -> std::io::Result<()> {
     let log_entry = format!("[{:.3}] [{}] {}\n", timestamp, endpoint_name, signature);
     file.write_all(log_entry.as_bytes())
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+
+    let trimmed = sanitized.trim_matches('.');
+    if trimmed.is_empty() {
+        "endpoint".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
