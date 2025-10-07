@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use std::{
     collections::HashMap,
     fs::OpenOptions,
@@ -7,51 +8,32 @@ use std::{
 
 #[derive(Debug, Clone)]
 pub struct TransactionData {
-    pub timestamp: f64,
-    pub signature: String,
-    pub start_time: f64,
+    pub wallclock_secs: f64,
+    pub elapsed_since_start: Duration,
+    pub start_wallclock_secs: f64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct Comparator {
-    pub data: HashMap<String, HashMap<String, TransactionData>>,
-    pub worker_count: usize,
+    data: DashMap<String, HashMap<String, TransactionData>>,
 }
 
 impl Comparator {
-    pub fn new(worker_count: usize) -> Self {
+    pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
-            worker_count,
+            data: DashMap::new(),
         }
     }
 
-    pub fn add(&mut self, from: String, data: TransactionData) {
-        self.data
-            .entry(data.signature.clone())
-            .or_default()
-            .insert(from.clone(), data.clone());
-
-        let unique = self.get_valid_count();
-        let complete = self.get_all_seen_count();
-
-        log::info!(
-            "unique: {}, complete: {} of {}",
-            unique,
-            complete,
-            self.worker_count
-        );
+    pub fn add_batch(&self, from: &str, transactions: HashMap<String, TransactionData>) {
+        for (signature, data) in transactions {
+            let mut entry = self.data.entry(signature).or_default();
+            entry.insert(from.to_owned(), data);
+        }
     }
 
-    pub fn get_valid_count(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn get_all_seen_count(&self) -> usize {
-        self.data
-            .values()
-            .filter(|m| m.len() >= self.worker_count)
-            .count()
+    pub fn iter(&self) -> dashmap::iter::Iter<'_, String, HashMap<String, TransactionData>> {
+        self.data.iter()
     }
 }
 

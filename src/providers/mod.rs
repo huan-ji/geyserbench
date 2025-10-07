@@ -1,4 +1,8 @@
-use std::{error::Error, sync::Arc};
+use std::{
+    error::Error,
+    sync::{atomic::AtomicUsize, Arc},
+    time::Instant,
+};
 use tokio::sync::broadcast;
 
 use crate::{
@@ -7,6 +11,7 @@ use crate::{
 };
 
 pub mod arpc;
+pub mod common;
 pub mod jetstream;
 pub mod shreder;
 pub mod shredstream;
@@ -18,10 +23,7 @@ pub trait GeyserProvider: Send + Sync {
         &self,
         endpoint: Endpoint,
         config: Config,
-        shutdown_tx: broadcast::Sender<()>,
-        shutdown_rx: broadcast::Receiver<()>,
-        start_time: f64,
-        comparator: Arc<std::sync::Mutex<Comparator>>,
+        context: ProviderContext,
     ) -> tokio::task::JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>;
 }
 
@@ -34,4 +36,15 @@ pub fn create_provider(kind: &EndpointKind) -> Box<dyn GeyserProvider> {
         EndpointKind::Shredstream => Box::new(shredstream::ShredstreamProvider),
         EndpointKind::Jetstream => Box::new(jetstream::JetstreamProvider),
     }
+}
+
+pub struct ProviderContext {
+    pub shutdown_tx: broadcast::Sender<()>,
+    pub shutdown_rx: broadcast::Receiver<()>,
+    pub start_wallclock_secs: f64,
+    pub start_instant: Instant,
+    pub comparator: Arc<Comparator>,
+    pub target_transactions: Option<usize>,
+    pub completion_counter: Arc<AtomicUsize>,
+    pub total_producers: usize,
 }

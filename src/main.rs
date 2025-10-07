@@ -7,7 +7,8 @@ pub use {
     serde::{Deserialize, Serialize},
     std::{
         env,
-        sync::{Arc, Mutex},
+        sync::{atomic::AtomicUsize, Arc},
+        time::Instant,
     },
     tokio::{signal::ctrl_c, sync::broadcast, task},
 };
@@ -29,30 +30,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
-    let endpoint_count = config.endpoint.len();
-
     let start_time = get_current_timestamp();
-    // Expect each endpoint to eventually report; use endpoint count
-    let comparator = Arc::new(Mutex::new(Comparator::new(endpoint_count)));
+    let comparator = Arc::new(Comparator::new());
+    let start_instant = Instant::now();
 
     let mut handles = Vec::new();
     let endpoint_names: Vec<String> = config.endpoint.iter().map(|e| e.name.clone()).collect();
+    let completion_counter = Arc::new(AtomicUsize::new(0));
+    let global_target = if config.config.transactions > 0 {
+        Some(config.config.transactions as usize)
+    } else {
+        None
+    };
 
+    let total_producers = config.endpoint.len();
     for endpoint in config.endpoint.clone() {
         let provider = providers::create_provider(&endpoint.kind);
         let shared_config = config.config.clone();
-        let stx = shutdown_tx.clone();
-        let shutdown_rx = shutdown_tx.subscribe();
-        let shared_comparator = comparator.clone();
+        let context = providers::ProviderContext {
+            shutdown_tx: shutdown_tx.clone(),
+            shutdown_rx: shutdown_tx.subscribe(),
+            start_wallclock_secs: start_time,
+            start_instant,
+            comparator: comparator.clone(),
+            target_transactions: global_target,
+            completion_counter: completion_counter.clone(),
+            total_producers,
+        };
 
-        handles.push(provider.process(
-            endpoint,
-            shared_config,
-            stx,
-            shutdown_rx,
-            start_time,
-            shared_comparator,
-        ));
+        handles.push(provider.process(endpoint, shared_config, context));
     }
 
     tokio::spawn({
@@ -76,14 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let comp_guard = match comparator.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            log::error!("Comparator mutex poisoned; continuing with inner value");
-            poisoned.into_inner()
-        }
-    };
-    analysis::analyze_delays(&comp_guard, endpoint_names);
+    analysis::analyze_delays(comparator.as_ref(), &endpoint_names);
 
     Ok(())
 }
