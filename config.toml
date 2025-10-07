@@ -1,22 +1,14 @@
 [config]
 transactions = 1000
-account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+account = "ComputeBudget111111111111111111111111111111"
 commitment = "processed"
-
-[[endpoint]]
-name = "shreder"
-url = "http://fra1.shreder.xyz:9991"
-x_token = ""
-kind = "shreder"
 
 [[endpoint]]
 name = "arpc"
 url = "http://fra.corvus-labs.io:20202"
-x_token = ""
 kind = "arpc"
 
 [[endpoint]]
 name = "grpc"
 url = "http://fra.corvus-labs.io:10101"
-x_token = ""
 kind = "yellowstone"

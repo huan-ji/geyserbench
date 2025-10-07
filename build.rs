@@ -1,39 +1,38 @@
 use std::{env, path::PathBuf};
 
-const PROTOC_ENVAR: &str = "PROTOC";
-#[inline]
-pub fn protoc() -> String {
-    protobuf_src::protoc()
-        .to_str()
-        .expect("Vendored Protoc should always be available")
-        .to_string()
-}
+const PROTOC: &str = "PROTOC";
+const PROTOC_INCLUDE: &str = "PROTOC_INCLUDE";
+const PROTO_ROOT: &str = "proto";
+const PROTO_FILES: &[&str] = &[
+    "proto/arpc.proto",
+    "proto/events.proto",
+    "proto/publisher.proto",
+    "proto/shredstream.proto",
+    "proto/shreder.proto",
+    "proto/jetstream.proto",
+];
 
-#[inline]
-pub fn mpath(path: &str) -> String {
-    path.to_string()
-}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-env-changed=PROTOC");
+    println!("cargo:rerun-if-env-changed=PROTOC_INCLUDE");
+    println!("cargo:rerun-if-changed=proto");
+    ensure_protoc()?;
 
-fn main() -> anyhow::Result<()> {
-    if env::var(PROTOC_ENVAR).is_err() {
-        println!("protoc not found in PATH, attempting to fix");
-        env::set_var(PROTOC_ENVAR, protoc());
-    }
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 
-    let proto_files = [
-        mpath("proto/arpc.proto"),
-        mpath("proto/events.proto"),
-        mpath("proto/publisher.proto"),
-        mpath("proto/shredstream.proto"),
-        mpath("proto/shreder.proto"),
-        mpath("proto/jetstream.proto"),
-    ];
-
-    let out_dir = env::var("OUT_DIR").map(PathBuf::from)?;
-
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("proto_descriptors.bin"))
-        .compile_protos(&proto_files, &[mpath("proto")])?;
+        .compile_protos(PROTO_FILES, &[PROTO_ROOT])?;
+
+    Ok(())
+}
+
+fn ensure_protoc() -> core::result::Result<(), protoc_bin_vendored::Error> {
+    let protoc = protoc_bin_vendored::protoc_bin_path()?;
+    let include_path = protoc_bin_vendored::include_path()?;
+
+    env::set_var(PROTOC, &protoc);
+    env::set_var(PROTOC_INCLUDE, &include_path);
 
     Ok(())
 }

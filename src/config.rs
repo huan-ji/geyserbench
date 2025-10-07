@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use yellowstone_grpc_proto::geyser::CommitmentLevel;
@@ -19,7 +20,8 @@ pub struct Config {
 pub struct Endpoint {
     pub name: String,
     pub url: String,
-    pub x_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_token: Option<String>,
     pub kind: EndpointKind,
 }
 
@@ -54,13 +56,14 @@ impl From<ArgsCommitment> for CommitmentLevel {
 }
 
 impl ConfigToml {
-    pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let config = toml::from_str(&content)?;
+    pub fn load(path: &str) -> Result<Self> {
+        let content =
+            fs::read_to_string(path).with_context(|| format!("Failed to read config {}", path))?;
+        let config = toml::from_str(&content).map_err(|err| anyhow!(err))?;
         Ok(config)
     }
 
-    pub fn create_default(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn create_default(path: &str) -> Result<Self> {
         let default_config = ConfigToml {
             config: Config {
                 transactions: 100,
@@ -71,25 +74,27 @@ impl ConfigToml {
                 Endpoint {
                     name: "grpc".to_string(),
                     url: "http://0.0.0.0:10101".to_string(),
-                    x_token: "".to_string(),
+                    x_token: None,
                     kind: EndpointKind::Yellowstone,
                 },
                 Endpoint {
                     name: "arpc".to_string(),
                     url: "http://0.0.0.0:20202".to_string(),
-                    x_token: "".to_string(),
+                    x_token: None,
                     kind: EndpointKind::Arpc,
                 },
             ],
         };
 
-        let toml_string = toml::to_string_pretty(&default_config)?;
-        fs::write(path, toml_string)?;
+        let toml_string = toml::to_string_pretty(&default_config)
+            .context("Failed to serialize default config")?;
+        fs::write(path, toml_string)
+            .with_context(|| format!("Failed to write default config {}", path))?;
 
         Ok(default_config)
     }
 
-    pub fn load_or_create(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_or_create(path: &str) -> Result<Self> {
         if Path::new(path).exists() {
             Self::load(path)
         } else {
