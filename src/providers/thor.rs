@@ -67,7 +67,15 @@ async fn process_thor_endpoint(
     };
 
     let endpoint_url = endpoint.url.clone();
-    let endpoint_token = endpoint.x_token.clone();
+    let auth_header = endpoint
+        .x_token
+        .as_ref()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            MetadataValue::try_from(token)
+                .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err))
+        });
 
     log::info!(
         "[{}] Connecting to endpoint: {}",
@@ -84,14 +92,13 @@ async fn process_thor_endpoint(
         .connect()
         .await
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
-    let add_auth = move |mut req: Request<()>| {
-        let meta = MetadataValue::try_from(endpoint_token.as_str())
-            .expect("Invalid token string for metadata");
-        req.metadata_mut().insert("authorization", meta);
-        Ok(req)
-    };
-
-    let mut publisher_client = EventPublisherClient::with_interceptor(channel, add_auth);
+    let mut publisher_client =
+        EventPublisherClient::with_interceptor(channel, move |mut req: Request<()>| {
+            if let Some(ref token) = auth_header {
+                req.metadata_mut().insert("authorization", token.clone());
+            }
+            Ok(req)
+        });
     log::info!("[{}] Connected successfully", endpoint_name);
 
     let mut stream: Streaming<StreamResponse> = publisher_client

@@ -85,12 +85,82 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
         .map(|stats| stats.first_detections)
         .sum();
 
-    let mut summaries: Vec<EndpointSummary> = endpoint_stats
+    let summaries: Vec<EndpointSummary> = endpoint_stats
         .into_iter()
         .map(|(endpoint, stats)| build_summary(endpoint, stats, total_first_detections))
         .collect();
 
-    summaries.sort_by(|a, b| match (a.avg_delay_ms, b.avg_delay_ms) {
+    let mut summary_rows: Vec<&EndpointSummary> = summaries.iter().collect();
+    summary_rows.sort_by(|a, b| {
+        b.first_share
+            .partial_cmp(&a.first_share)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| match (a.avg_delay_ms, b.avg_delay_ms) {
+                (Some(lhs), Some(rhs)) => {
+                    lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.cmp(&b.name),
+            })
+    });
+
+    println!("\nFinished test results");
+    println!("--------------------------------------------");
+
+    let has_data = summary_rows
+        .iter()
+        .any(|summary| summary.valid_transactions > 0);
+
+    if !has_data {
+        println!("Not enough data");
+    } else {
+        let fastest_summary = summary_rows
+            .iter()
+            .copied()
+            .find(|summary| summary.valid_transactions > 0);
+        let fastest_name = fastest_summary.map(|summary| summary.name.as_str());
+
+        for summary in summary_rows {
+            if summary.valid_transactions == 0 {
+                println!("{}: Not enough data", summary.name);
+                continue;
+            }
+
+            let raw_win_rate = format_percent(summary.first_share);
+            let win_rate = if raw_win_rate == "—" {
+                raw_win_rate
+            } else {
+                format!("{}%", raw_win_rate)
+            };
+            let mut avg_delay = summary.avg_delay_ms.unwrap_or(0.0);
+            let is_fastest = fastest_name == Some(summary.name.as_str());
+
+            if is_fastest {
+                avg_delay = 0.0;
+                println!(
+                    "{}: Win rate {}, avg delay {:.2}ms (fastest)",
+                    summary.name, win_rate, avg_delay
+                );
+            } else {
+                println!(
+                    "{}: Win rate {}, avg delay {:.2}ms",
+                    summary.name, win_rate, avg_delay
+                );
+            }
+        }
+    }
+
+    println!("\nDetailed test results");
+    println!("--------------------------------------------");
+
+    if !has_data {
+        println!("Not enough data");
+        return;
+    }
+
+    let mut table_rows: Vec<&EndpointSummary> = summaries.iter().collect();
+    table_rows.sort_by(|a, b| match (a.avg_delay_ms, b.avg_delay_ms) {
         (Some(lhs), Some(rhs)) => lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -112,9 +182,9 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
         "Backfill",
     ]);
 
-    for summary in summaries {
+    for summary in table_rows {
         table.add_row(vec![
-            summary.name,
+            summary.name.clone(),
             format_percent(summary.first_share),
             format_option(summary.avg_delay_ms),
             format_option(summary.median_delay_ms),
@@ -126,7 +196,7 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
         ]);
     }
 
-    println!("\n{}", table);
+    println!("{}", table);
 }
 
 fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {

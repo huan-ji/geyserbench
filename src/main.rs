@@ -18,11 +18,12 @@ mod config;
 mod providers;
 mod utils;
 
+use anyhow::Result;
 use utils::{get_current_timestamp, Comparator};
 const CONFIG_PATH: &str = "config.toml";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let config = config::ConfigToml::load_or_create(CONFIG_PATH)?;

@@ -12,7 +12,7 @@ const PROTO_FILES: &[&str] = &[
     "proto/jetstream.proto",
 ];
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=PROTOC");
     println!("cargo:rerun-if-env-changed=PROTOC_INCLUDE");
     println!("cargo:rerun-if-changed=proto");
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn ensure_protoc() -> anyhow::Result<()> {
+fn ensure_protoc() -> core::result::Result<(), protoc_bin_vendored::Error> {
     let protoc = protoc_bin_vendored::protoc_bin_path()?;
     let include_path = protoc_bin_vendored::include_path()?;
 

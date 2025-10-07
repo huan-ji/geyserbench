@@ -58,7 +58,10 @@ async fn process_yellowstone_endpoint(
     };
 
     let endpoint_url = endpoint.url.clone();
-    let endpoint_token = endpoint.x_token.clone();
+    let endpoint_token = endpoint
+        .x_token
+        .clone()
+        .filter(|token| !token.trim().is_empty());
 
     log::info!(
         "[{}] Connecting to endpoint: {}",
@@ -68,9 +71,13 @@ async fn process_yellowstone_endpoint(
 
     let builder = GeyserGrpcClient::build_from_shared(endpoint_url.clone())
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
-    let builder = builder
-        .x_token(Some(endpoint_token))
-        .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
+    let builder = if let Some(token) = endpoint_token {
+        builder
+            .x_token(Some(token))
+            .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err))
+    } else {
+        builder
+    };
     let builder = builder
         .tls_config(ClientTlsConfig::new().with_native_roots())
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
