@@ -3,6 +3,7 @@ use std::{collections::HashMap, error::Error, sync::atomic::Ordering};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use solana_pubkey::Pubkey;
 use tokio::task;
+use tracing::{error, info, warn, Level};
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
     geyser::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestPing},
@@ -16,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    common::{fatal_connection_error, TransactionAccumulator},
+    common::{build_signature_envelope, fatal_connection_error, TransactionAccumulator},
     GeyserProvider, ProviderContext,
 };
 
@@ -44,14 +45,18 @@ async fn process_yellowstone_endpoint(
         start_wallclock_secs,
         start_instant,
         comparator,
+        signature_tx,
+        shared_counter,
+        shared_shutdown,
         target_transactions,
-        completion_counter,
         total_producers,
     } = context;
 
+    let signature_sender = signature_tx;
+
     let account_pubkey = config.account.parse::<Pubkey>()?;
     let endpoint_name = endpoint.name.clone();
-    let mut log_file = if log::log_enabled!(log::Level::Trace) {
+    let mut log_file = if tracing::enabled!(Level::TRACE) {
         Some(open_log_file(&endpoint_name)?)
     } else {
         None
@@ -63,11 +68,7 @@ async fn process_yellowstone_endpoint(
         .clone()
         .filter(|token| !token.trim().is_empty());
 
-    log::info!(
-        "[{}] Connecting to endpoint: {}",
-        endpoint_name,
-        endpoint_url
-    );
+    info!(endpoint = %endpoint_name, url = %endpoint_url, "Connecting");
 
     let builder = GeyserGrpcClient::build_from_shared(endpoint_url.clone())
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
@@ -86,7 +87,7 @@ async fn process_yellowstone_endpoint(
         .await
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
 
-    log::info!("[{}] Connected successfully", endpoint_name);
+    info!(endpoint = %endpoint_name, "Connected");
 
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
     let commitment: yellowstone_grpc_proto::geyser::CommitmentLevel = config.commitment.into();
@@ -119,13 +120,12 @@ async fn process_yellowstone_endpoint(
         .await?;
 
     let mut accumulator = TransactionAccumulator::new();
-    let mut reached_target = false;
     let mut transaction_count = 0usize;
 
     loop {
         tokio::select! { biased;
             _ = shutdown_rx.recv() => {
-                log::info!("[{}] Received stop signal...", endpoint_name);
+                info!(endpoint = %endpoint_name, "Received stop signal");
                 break;
             }
 
@@ -148,7 +148,7 @@ async fn process_yellowstone_endpoint(
                                                 .and_then(|t| t.signatures.first()) {
                                                 Some(sig) => bs58::encode(sig).into_string(),
                                                 None => {
-                                                    log::warn!("[{}] Missing signature in transaction", endpoint_name);
+                                                    warn!(endpoint = %endpoint_name, "Missing signature in transaction");
                                                     continue;
                                                 }
                                             };
@@ -157,32 +157,46 @@ async fn process_yellowstone_endpoint(
                                                 write_log_entry(file, wallclock, &endpoint_name, &signature)?;
                                             }
 
-                                            accumulator.record(
-                                                signature,
-                                                TransactionData {
-                                                    wallclock_secs: wallclock,
-                                                    elapsed_since_start: elapsed,
-                                                    start_wallclock_secs,
-                                                },
+                                            let tx_data = TransactionData {
+                                                wallclock_secs: wallclock,
+                                                elapsed_since_start: elapsed,
+                                                start_wallclock_secs,
+                                            };
+
+                                            let updated = accumulator.record(
+                                                signature.clone(),
+                                                tx_data.clone(),
                                             );
 
-                                            transaction_count += 1;
-                                            if let Some(target) = target_transactions {
-                                                if !reached_target && transaction_count >= target {
-                                                    reached_target = true;
-                                                    let completed = completion_counter
-                                                        .fetch_add(1, Ordering::AcqRel)
-                                                        + 1;
-                                                    let required = total_producers.max(1);
-                                                    if completed >= required {
-                                                        log::info!(
-                                                            "All endpoints reached target {}; broadcasting shutdown",
-                                                            target
-                                                        );
-                                                        let _ = shutdown_tx.send(());
+                                            if updated {
+                                                if let Some(envelope) = build_signature_envelope(
+                                                    &comparator,
+                                                    &endpoint_name,
+                                                    &signature,
+                                                    tx_data,
+                                                    total_producers,
+                                                ) {
+                                                    if let Some(target) = target_transactions {
+                                                        let shared = shared_counter
+                                                            .fetch_add(1, Ordering::AcqRel)
+                                                            + 1;
+                                                        if shared >= target
+                                                            && !shared_shutdown.swap(true, Ordering::AcqRel)
+                                                        {
+                                                            info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
+                                                            let _ = shutdown_tx.send(());
+                                                        }
+                                                    }
+
+                                                    if let Some(sender) = signature_sender.as_ref() {
+                                                        if let Err(err) = sender.send(envelope).await {
+                                                            warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
+                                                        }
                                                     }
                                                 }
                                             }
+
+                                            transaction_count += 1;
                                         }
                                     }
                                 }
@@ -199,11 +213,11 @@ async fn process_yellowstone_endpoint(
                         }
                     },
                     Some(Err(e)) => {
-                        log::error!("[{}] Error receiving message: {:?}", endpoint_name, e);
+                        error!(endpoint = %endpoint_name, error = ?e, "Error receiving message from stream");
                         break;
                     },
                     None => {
-                        log::info!("[{}] Stream closed", endpoint_name);
+                        info!(endpoint = %endpoint_name, "Stream closed by server");
                         break;
                     }
                 }
@@ -214,11 +228,11 @@ async fn process_yellowstone_endpoint(
     let unique_signatures = accumulator.len();
     let collected = accumulator.into_inner();
     comparator.add_batch(&endpoint_name, collected);
-    log::info!(
-        "[{}] Stream closed after dispatching {} transactions (unique signatures: {})",
-        endpoint_name,
-        transaction_count,
-        unique_signatures
+    info!(
+        endpoint = %endpoint_name,
+        total_transactions = transaction_count,
+        unique_signatures,
+        "Stream closed after dispatching transactions"
     );
     Ok(())
 }

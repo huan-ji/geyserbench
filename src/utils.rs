@@ -1,10 +1,11 @@
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use std::{
     collections::HashMap,
     fs::OpenOptions,
     io::Write,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct TransactionData {
@@ -16,12 +17,14 @@ pub struct TransactionData {
 #[derive(Debug)]
 pub struct Comparator {
     data: DashMap<String, HashMap<String, TransactionData>>,
+    emitted: DashSet<String>,
 }
 
 impl Comparator {
     pub fn new() -> Self {
         Self {
             data: DashMap::new(),
+            emitted: DashSet::new(),
         }
     }
 
@@ -29,6 +32,51 @@ impl Comparator {
         for (signature, data) in transactions {
             let mut entry = self.data.entry(signature).or_default();
             entry.insert(from.to_owned(), data);
+        }
+    }
+
+    pub fn record_observation(
+        &self,
+        endpoint: &str,
+        signature: &str,
+        data: TransactionData,
+        expected_producers: usize,
+    ) -> Option<HashMap<String, TransactionData>> {
+        if expected_producers == 0 {
+            return None;
+        }
+
+        let mut entry = self.data.entry(signature.to_owned()).or_default();
+
+        let mut updated = false;
+        entry
+            .entry(endpoint.to_owned())
+            .and_modify(|existing| {
+                if data.elapsed_since_start < existing.elapsed_since_start {
+                    *existing = data.clone();
+                    updated = true;
+                }
+            })
+            .or_insert_with(|| {
+                updated = true;
+                data.clone()
+            });
+
+        if !updated {
+            return None;
+        }
+
+        if entry.len() != expected_producers {
+            return None;
+        }
+
+        let snapshot = entry.clone();
+        drop(entry);
+
+        if self.emitted.insert(signature.to_owned()) {
+            Some(snapshot)
+        } else {
+            None
         }
     }
 
@@ -43,7 +91,7 @@ pub fn get_current_timestamp() -> f64 {
         Ok(d) => d,
         Err(e) => {
             // System clock went backwards; log and clamp to 0
-            log::warn!("SystemTime error (clock skew): {}", e);
+            warn!("SystemTime error (clock skew): {}", e);
             Duration::from_secs(0)
         }
     };

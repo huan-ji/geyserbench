@@ -1,11 +1,15 @@
 use std::{
     error::Error,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc,
+    },
     time::Instant,
 };
 use tokio::sync::broadcast;
 
 use crate::{
+    backend::SignatureSender,
     config::{Config, Endpoint, EndpointKind},
     utils::Comparator,
 };
@@ -44,7 +48,9 @@ pub struct ProviderContext {
     pub start_wallclock_secs: f64,
     pub start_instant: Instant,
     pub comparator: Arc<Comparator>,
+    pub signature_tx: Option<SignatureSender>,
+    pub shared_counter: Arc<AtomicUsize>,
+    pub shared_shutdown: Arc<AtomicBool>,
     pub target_transactions: Option<usize>,
-    pub completion_counter: Arc<AtomicUsize>,
     pub total_producers: usize,
 }
