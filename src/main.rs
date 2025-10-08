@@ -22,11 +22,12 @@ mod utils;
 
 use anyhow::{Result, anyhow};
 use backend::{BackendStatus, StreamOptions};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use utils::{Comparator, ProgressTracker, get_current_timestamp};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_BACKEND_STREAM_URL: &str = "wss://gb.solstack.app/v1/benchmarks/stream";
+const MAX_STREAM_TRANSACTIONS: i32 = 100_000;
 
 struct CliArgs {
     config_path: Option<String>,
@@ -98,8 +99,17 @@ async fn main() -> Result<()> {
     let shared_shutdown = Arc::new(AtomicBool::new(false));
     let aborted = Arc::new(AtomicBool::new(false));
 
+    let high_transaction_volume = config.config.transactions > MAX_STREAM_TRANSACTIONS;
+    if high_transaction_volume {
+        warn!(
+            transactions = config.config.transactions,
+            threshold = MAX_STREAM_TRANSACTIONS,
+            "Disabling backend streaming for high-volume run; backend streaming is unavailable when transactions exceed the threshold"
+        );
+    }
+
     let mut backend_settings = config.backend.clone();
-    backend_settings.enabled = !cli.disable_streaming;
+    backend_settings.enabled = !(cli.disable_streaming || high_transaction_volume);
     backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;

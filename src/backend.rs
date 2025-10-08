@@ -1,5 +1,5 @@
 use crate::config::{Config, Endpoint};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use blake3::Hasher;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};

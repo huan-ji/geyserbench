@@ -2,19 +2,19 @@ use std::{error::Error, sync::atomic::Ordering};
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{get_current_timestamp, open_log_file, write_log_entry, TransactionData},
+    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
 };
 use futures_util::stream::StreamExt;
 
 use prost::Message;
 use solana_pubkey::Pubkey;
 use tokio::task;
-use tonic::{metadata::MetadataValue, transport::Channel, Request, Streaming};
-use tracing::{info, warn, Level};
+use tonic::{Request, Streaming, metadata::MetadataValue, transport::Channel};
+use tracing::{Level, info, warn};
 
 use super::{
-    common::{build_signature_envelope, fatal_connection_error, TransactionAccumulator},
     GeyserProvider, ProviderContext,
+    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
 };
 
 #[allow(clippy::all, dead_code)]
@@ -27,8 +27,8 @@ pub mod publisher {
     include!(concat!(env!("OUT_DIR"), "/publisher.rs"));
 }
 
-use publisher::{event_publisher_client::EventPublisherClient, StreamResponse};
-use thor_streamer::{message_wrapper::EventMessage, MessageWrapper};
+use publisher::{StreamResponse, event_publisher_client::EventPublisherClient};
+use thor_streamer::{MessageWrapper, message_wrapper::EventMessage};
 
 pub struct ThorProvider;
 

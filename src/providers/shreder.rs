@@ -1,18 +1,18 @@
-use futures::{channel::mpsc::unbounded, SinkExt};
+use futures::{SinkExt, channel::mpsc::unbounded};
 use futures_util::stream::StreamExt;
 use solana_pubkey::Pubkey;
 use std::{collections::HashMap, error::Error, sync::atomic::Ordering};
 use tokio::task;
-use tracing::{info, trace, warn, Level};
+use tracing::{Level, info, trace, warn};
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{get_current_timestamp, open_log_file, write_log_entry, TransactionData},
+    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
 };
 
 use super::{
-    common::{build_signature_envelope, fatal_connection_error, TransactionAccumulator},
     GeyserProvider, ProviderContext,
+    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
 };
 
 #[allow(clippy::all, dead_code)]
@@ -21,8 +21,8 @@ pub mod shreder {
 }
 
 use shreder::{
-    shreder_service_client::ShrederServiceClient, SubscribeRequestFilterTransactions,
-    SubscribeTransactionsRequest,
+    SubscribeRequestFilterTransactions, SubscribeTransactionsRequest,
+    shreder_service_client::ShrederServiceClient,
 };
 
 pub struct ShrederProvider;

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use yellowstone_grpc_proto::geyser::CommitmentLevel;

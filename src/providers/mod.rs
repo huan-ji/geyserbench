@@ -1,8 +1,8 @@
 use std::{
     error::Error,
     sync::{
-        atomic::{AtomicBool, AtomicUsize},
         Arc,
+        atomic::{AtomicBool, AtomicUsize},
     },
     time::Instant,
 };
