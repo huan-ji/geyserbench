@@ -482,33 +482,16 @@ fn compute_proof(
     signature: &str,
     timestamp: f64,
 ) -> String {
-    let timestamp_micros = (timestamp * 1_000_000.0).round() as i64;
-    let timestamp_bytes = timestamp_micros.to_be_bytes();
+    let quantized_steps = (timestamp * 10.0).round() as i64;
+    let quantized_timestamp = quantized_steps as f64 / 10.0;
+
     let mut hasher = Hasher::new();
     hasher.update(session_nonce);
     hasher.update(endpoint.as_bytes());
     hasher.update(signature.as_bytes());
-    hasher.update(&timestamp_bytes);
+    hasher.update(&quantized_timestamp.to_be_bytes());
     let result = hasher.finalize();
-    let proof = hex::encode(result.as_bytes());
-
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        debug!(
-            target: "backend::proof",
-            endpoint,
-            signature,
-            timestamp,
-            timestamp_micros,
-            session_nonce_hex = %hex::encode(session_nonce),
-            endpoint_bytes_hex = %hex::encode(endpoint.as_bytes()),
-            signature_bytes_hex = %hex::encode(signature.as_bytes()),
-            timestamp_bytes_hex = %hex::encode(timestamp_bytes),
-            proof_hex = %proof,
-            "computed proof inputs and output"
-        );
-    }
-
-    proof
+    hex::encode(result.as_bytes())
 }
 
 impl BackendConfigPayload {
