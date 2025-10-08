@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use crate::{
     backend::SignatureSender,
     config::{Config, Endpoint, EndpointKind},
-    utils::Comparator,
+    utils::{Comparator, ProgressTracker},
 };
 
 pub mod arpc;
@@ -53,4 +53,5 @@ pub struct ProviderContext {
     pub shared_shutdown: Arc<AtomicBool>,
     pub target_transactions: Option<usize>,
     pub total_producers: usize,
+    pub progress: Option<Arc<ProgressTracker>>,
 }

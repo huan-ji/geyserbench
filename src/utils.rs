@@ -3,9 +3,10 @@ use std::{
     collections::HashMap,
     fs::OpenOptions,
     io::Write,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct TransactionData {
@@ -82,6 +83,54 @@ impl Comparator {
 
     pub fn iter(&self) -> dashmap::iter::Iter<'_, String, HashMap<String, TransactionData>> {
         self.data.iter()
+    }
+}
+
+#[derive(Debug)]
+pub struct ProgressTracker {
+    target: usize,
+    next_checkpoint: AtomicUsize,
+}
+
+impl ProgressTracker {
+    pub fn new(target: usize) -> Self {
+        Self {
+            target,
+            next_checkpoint: AtomicUsize::new(5),
+        }
+    }
+
+    pub fn record(&self, current: usize) {
+        if self.target == 0 {
+            return;
+        }
+
+        let percent = (current.saturating_mul(100)) / self.target.max(1);
+
+        loop {
+            let next = self.next_checkpoint.load(Ordering::Acquire);
+            if next > 100 {
+                break;
+            }
+
+            if percent < next {
+                break;
+            }
+
+            if self
+                .next_checkpoint
+                .compare_exchange(next, next + 5, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let clamped = next.min(100);
+                info!(
+                    progress = %format!("{}%", clamped),
+                    current,
+                    target = self.target,
+                );
+                break;
+            }
+        }
     }
 }
 

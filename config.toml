@@ -1,5 +1,5 @@
 [config]
-transactions = 1000
+transactions = 10000
 account = "ComputeBudget111111111111111111111111111111"
 commitment = "processed"
 

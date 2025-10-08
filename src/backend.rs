@@ -120,7 +120,7 @@ struct SignedObservationPayload {
     endpoint: String,
     timestamp: f64,
     proof: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    #[serde(skip_serializing_if = "core::ops::Not::not", default)]
     backfilled: bool,
 }
 

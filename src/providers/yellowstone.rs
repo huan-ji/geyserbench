@@ -50,6 +50,7 @@ async fn process_yellowstone_endpoint(
         shared_shutdown,
         target_transactions,
         total_producers,
+        progress,
     } = context;
 
     let signature_sender = signature_tx;
@@ -180,6 +181,9 @@ async fn process_yellowstone_endpoint(
                                                         let shared = shared_counter
                                                             .fetch_add(1, Ordering::AcqRel)
                                                             + 1;
+                                                        if let Some(tracker) = progress.as_ref() {
+                                                            tracker.record(shared);
+                                                        }
                                                         if shared >= target
                                                             && !shared_shutdown.swap(true, Ordering::AcqRel)
                                                         {

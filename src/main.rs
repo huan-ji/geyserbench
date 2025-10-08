@@ -6,7 +6,7 @@ pub use {
     std::{
         env,
         sync::{
-            atomic::{AtomicBool, AtomicUsize},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
         time::Instant,
@@ -24,7 +24,7 @@ use anyhow::{anyhow, Result};
 use backend::{BackendStatus, StreamOptions};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
-use utils::{get_current_timestamp, Comparator};
+use utils::{get_current_timestamp, Comparator, ProgressTracker};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
 struct CliArgs {
@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
     let start_instant = Instant::now();
     let shared_counter = Arc::new(AtomicUsize::new(0));
     let shared_shutdown = Arc::new(AtomicBool::new(false));
+    let aborted = Arc::new(AtomicBool::new(false));
 
     let mut backend_settings = config.backend.clone();
     if let Some(url) = cli.backend_url {
@@ -163,6 +164,7 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let progress_tracker = global_target.map(|target| Arc::new(ProgressTracker::new(target)));
 
     let total_producers = config.endpoint.len();
     for endpoint in config.endpoint.clone() {
@@ -179,6 +181,7 @@ async fn main() -> Result<()> {
             shared_shutdown: shared_shutdown.clone(),
             target_transactions: global_target,
             total_producers,
+            progress: progress_tracker.clone(),
         };
 
         handles.push(provider.process(endpoint, shared_config, context));
@@ -186,10 +189,18 @@ async fn main() -> Result<()> {
 
     tokio::spawn({
         let shutdown_tx = shutdown_tx.clone();
+        let shared_shutdown = shared_shutdown.clone();
+        let aborted = aborted.clone();
         async move {
             match ctrl_c().await {
                 Ok(()) => {
-                    info!("Received Ctrl+C; initiating shutdown");
+                    let already_aborting = aborted.swap(true, Ordering::AcqRel);
+                    if already_aborting {
+                        info!("Received additional Ctrl+C; shutdown already in progress");
+                    } else {
+                        info!("Received Ctrl+C; initiating shutdown");
+                    }
+                    shared_shutdown.store(true, Ordering::Release);
                     let _ = shutdown_tx.send(());
                 }
                 Err(err) => error!(error = %err, "Failed to listen for Ctrl+C"),
@@ -208,19 +219,40 @@ async fn main() -> Result<()> {
     drop(signature_sender);
 
     if let Some(handle) = backend_handle {
-        let run_id = backend_run_id.unwrap_or_else(|| "unknown".to_string());
-        match handle.finish().await {
-            Ok(result) => {
-                info!(run_id = %run_id, "Backend completed run");
-                debug!(run_id = %run_id, response = %result.response, "Backend completion payload");
+        if aborted.load(Ordering::Acquire) {
+            if let Some(run_id) = backend_run_id.as_ref() {
+                info!(run_id = %run_id, "Skipping backend finalisation due to user abort");
+            } else {
+                info!("Skipping backend finalisation due to user abort");
             }
-            Err(err) => {
-                error!(run_id = %run_id, error = %err, "Backend streaming ended with error");
+            // Dropping the handle without calling finish() prevents the backend run from being saved.
+        } else {
+            let run_id = backend_run_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            match handle.finish().await {
+                Ok(result) => {
+                    info!(run_id = %run_id, "Backend completed run");
+                    debug!(run_id = %run_id, response = %result.response, "Backend completion payload");
+                }
+                Err(err) => {
+                    error!(run_id = %run_id, error = %err, "Backend streaming ended with error");
+                }
             }
         }
     }
 
-    analysis::analyze_delays(comparator.as_ref(), &endpoint_names);
+    let run_aborted = aborted.load(Ordering::Acquire);
+
+    if !run_aborted {
+        analysis::analyze_delays(comparator.as_ref(), &endpoint_names);
+
+        if let Some(run_id) = backend_run_id {
+            println!("🔗 Share this benchmark run: https://runs.solstack.app/run/{run_id}");
+        }
+    } else {
+        info!("Benchmark aborted before completion; no results were generated");
+    }
 
     Ok(())
 }
