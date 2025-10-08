@@ -6,8 +6,8 @@ pub use {
     std::{
         env,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Instant,
     },
@@ -20,11 +20,11 @@ mod config;
 mod providers;
 mod utils;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use backend::{BackendStatus, StreamOptions};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
-use utils::{get_current_timestamp, Comparator, ProgressTracker};
+use utils::{Comparator, ProgressTracker, get_current_timestamp};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_BACKEND_STREAM_URL: &str = "wss://gb.solstack.app/v1/benchmarks/stream";
 
@@ -51,7 +51,7 @@ impl CliArgs {
                     });
                     parsed.config_path = Some(value);
                 }
-                "--no-stream" => {
+                "--private" => {
                     parsed.disable_streaming = true;
                 }
                 "--help" | "-h" => {
@@ -71,7 +71,7 @@ impl CliArgs {
 }
 
 fn print_usage() {
-    eprintln!("Usage: geyserbench [--config <PATH>] [--no-stream]");
+    eprintln!("Usage: geyserbench [--config <PATH>] [--private]");
 }
 
 #[tokio::main]
@@ -99,11 +99,7 @@ async fn main() -> Result<()> {
     let aborted = Arc::new(AtomicBool::new(false));
 
     let mut backend_settings = config.backend.clone();
-    if cli.disable_streaming {
-        backend_settings.enabled = false;
-    } else {
-        backend_settings.enabled = true;
-    }
+    backend_settings.enabled = !cli.disable_streaming;
     backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;

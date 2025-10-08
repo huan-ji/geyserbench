@@ -1,4 +1,4 @@
-use crate::utils::{percentile, Comparator, TransactionData};
+use crate::utils::{Comparator, TransactionData, percentile};
 use comfy_table::{ContentArrangement, Table};
 
 #[cfg(target_os = "windows")]
@@ -69,12 +69,12 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
             }
 
             for (endpoint, tx) in sig_data.iter() {
-                if endpoint != first_endpoint {
-                    if let Some(stats) = endpoint_stats.get_mut(endpoint) {
-                        let delay_ms = diff_ms(tx, first_tx);
-                        stats.delays.push(delay_ms);
-                        stats.total_valid_transactions += 1;
-                    }
+                if endpoint != first_endpoint
+                    && let Some(stats) = endpoint_stats.get_mut(endpoint)
+                {
+                    let delay_ms = diff_ms(tx, first_tx);
+                    stats.delays.push(delay_ms);
+                    stats.total_valid_transactions += 1;
                 }
             }
         }

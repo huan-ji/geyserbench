@@ -3,22 +3,22 @@ use std::{collections::HashMap, error::Error, sync::atomic::Ordering};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use solana_pubkey::Pubkey;
 use tokio::task;
-use tracing::{error, info, warn, Level};
+use tracing::{Level, error, info, warn};
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::{
-    geyser::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeRequestPing},
+    geyser::{SubscribeRequest, SubscribeRequestPing, subscribe_update::UpdateOneof},
     prelude::SubscribeRequestFilterTransactions,
     tonic::transport::ClientTlsConfig,
 };
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{get_current_timestamp, open_log_file, write_log_entry, TransactionData},
+    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
 };
 
 use super::{
-    common::{build_signature_envelope, fatal_connection_error, TransactionAccumulator},
     GeyserProvider, ProviderContext,
+    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
 };
 
 pub struct YellowstoneProvider;
@@ -135,8 +135,8 @@ async fn process_yellowstone_endpoint(
                     Some(Ok(msg)) => {
                         match msg.update_oneof {
                     Some(UpdateOneof::Transaction(tx_msg)) => {
-                                if let Some(tx) = tx_msg.transaction.as_ref() {
-                                    if let Some(msg) = tx.transaction.as_ref().and_then(|t| t.message.as_ref()) {
+                                if let Some(tx) = tx_msg.transaction.as_ref()
+                                    && let Some(msg) = tx.transaction.as_ref().and_then(|t| t.message.as_ref()) {
                                         let has_account = msg
                                             .account_keys
                                             .iter()
@@ -169,8 +169,8 @@ async fn process_yellowstone_endpoint(
                                                 tx_data.clone(),
                                             );
 
-                                            if updated {
-                                                if let Some(envelope) = build_signature_envelope(
+                                            if updated
+                                                && let Some(envelope) = build_signature_envelope(
                                                     &comparator,
                                                     &endpoint_name,
                                                     &signature,
@@ -192,18 +192,15 @@ async fn process_yellowstone_endpoint(
                                                         }
                                                     }
 
-                                                    if let Some(sender) = signature_sender.as_ref() {
-                                                        if let Err(err) = sender.send(envelope).await {
+                                                    if let Some(sender) = signature_sender.as_ref()
+                                                        && let Err(err) = sender.send(envelope).await {
                                                             warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
                                                         }
-                                                    }
                                                 }
-                                            }
 
                                             transaction_count += 1;
                                         }
                                     }
-                                }
                             },
                             Some(UpdateOneof::Ping(_)) => {
                                 subscribe_tx

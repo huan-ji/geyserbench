@@ -106,8 +106,8 @@ async fn process_arpc_endpoint(
             }
 
             message = stream.next() => {
-                if let Some(Ok(msg)) = message {
-                    if let Some(tx) = msg.transaction {
+                if let Some(Ok(msg)) = message
+                    && let Some(tx) = msg.transaction {
                         let has_account = tx
                             .account_keys
                             .iter()
@@ -133,8 +133,8 @@ async fn process_arpc_endpoint(
                                 tx_data.clone(),
                             );
 
-                            if updated {
-                                if let Some(envelope) = build_signature_envelope(
+                            if updated
+                                && let Some(envelope) = build_signature_envelope(
                                     &comparator,
                                     &endpoint_name,
                                     &signature,
@@ -156,18 +156,15 @@ async fn process_arpc_endpoint(
                                         }
                                     }
 
-                                    if let Some(sender) = signature_sender.as_ref() {
-                                        if let Err(err) = sender.send(envelope).await {
+                                    if let Some(sender) = signature_sender.as_ref()
+                                        && let Err(err) = sender.send(envelope).await {
                                             warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
                                         }
-                                    }
                                 }
-                            }
 
                             transaction_count += 1;
                         }
                     }
-                }
             }
         }
     }

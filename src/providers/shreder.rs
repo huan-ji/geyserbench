@@ -107,10 +107,10 @@ async fn process_shredstream_endpoint(
 
             message = stream.next() => {
                 if let Some(message) = message.as_ref() { trace!(endpoint = %endpoint_name, ?message, "Received stream message"); }
-                if let Some(Ok(msg)) = message {
-                    if let Some(tx_update) = msg.transaction.as_ref() {
-                        if let Some(tx) = tx_update.transaction.as_ref() {
-                            if let Some(message) = tx.message.as_ref() {
+                if let Some(Ok(msg)) = message
+                    && let Some(tx_update) = msg.transaction.as_ref()
+                        && let Some(tx) = tx_update.transaction.as_ref()
+                            && let Some(message) = tx.message.as_ref() {
                                 let has_account = message
                                     .account_keys
                                     .iter()
@@ -140,8 +140,8 @@ async fn process_shredstream_endpoint(
                                         tx_data.clone(),
                                     );
 
-                                    if updated {
-                                        if let Some(envelope) = build_signature_envelope(
+                                    if updated
+                                        && let Some(envelope) = build_signature_envelope(
                                             &comparator,
                                             &endpoint_name,
                                             &signature,
@@ -163,20 +163,15 @@ async fn process_shredstream_endpoint(
                                                 }
                                             }
 
-                                            if let Some(sender) = signature_sender.as_ref() {
-                                                if let Err(err) = sender.send(envelope).await {
+                                            if let Some(sender) = signature_sender.as_ref()
+                                                && let Err(err) = sender.send(envelope).await {
                                                     warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
                                                 }
-                                            }
                                         }
-                                    }
 
                                     transaction_count += 1;
                                 }
                             }
-                        }
-                    }
-                }
             }
         }
     }
