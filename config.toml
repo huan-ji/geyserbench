@@ -4,11 +4,11 @@ account = "ComputeBudget111111111111111111111111111111"
 commitment = "processed"
 
 [[endpoint]]
-name = "arpc"
+name = "Corvus aRPC"
 url = "http://fra.corvus-labs.io:20202"
 kind = "arpc"
 
 [[endpoint]]
-name = "grpc"
+name = "Corvus gRPC"
 url = "http://fra.corvus-labs.io:10101"
 kind = "yellowstone"

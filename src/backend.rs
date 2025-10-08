@@ -482,11 +482,12 @@ fn compute_proof(
     signature: &str,
     timestamp: f64,
 ) -> String {
+    let timestamp_micros = (timestamp * 1_000_000.0).round() as i64;
     let mut hasher = Hasher::new();
     hasher.update(session_nonce);
     hasher.update(endpoint.as_bytes());
     hasher.update(signature.as_bytes());
-    hasher.update(&timestamp.to_be_bytes());
+    hasher.update(&timestamp_micros.to_be_bytes());
     let result = hasher.finalize();
     hex::encode(result.as_bytes())
 }
