@@ -483,13 +483,32 @@ fn compute_proof(
     timestamp: f64,
 ) -> String {
     let timestamp_micros = (timestamp * 1_000_000.0).round() as i64;
+    let timestamp_bytes = timestamp_micros.to_be_bytes();
     let mut hasher = Hasher::new();
     hasher.update(session_nonce);
     hasher.update(endpoint.as_bytes());
     hasher.update(signature.as_bytes());
-    hasher.update(&timestamp_micros.to_be_bytes());
+    hasher.update(&timestamp_bytes);
     let result = hasher.finalize();
-    hex::encode(result.as_bytes())
+    let proof = hex::encode(result.as_bytes());
+
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        debug!(
+            target: "backend::proof",
+            endpoint,
+            signature,
+            timestamp,
+            timestamp_micros,
+            session_nonce_hex = %hex::encode(session_nonce),
+            endpoint_bytes_hex = %hex::encode(endpoint.as_bytes()),
+            signature_bytes_hex = %hex::encode(signature.as_bytes()),
+            timestamp_bytes_hex = %hex::encode(timestamp_bytes),
+            proof_hex = %proof,
+            "computed proof inputs and output"
+        );
+    }
+
+    proof
 }
 
 impl BackendConfigPayload {
