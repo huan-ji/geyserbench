@@ -26,10 +26,10 @@ use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 use utils::{get_current_timestamp, Comparator, ProgressTracker};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
+const DEFAULT_BACKEND_STREAM_URL: &str = "wss://gb.solstack.app/v1/benchmarks/stream";
 
 struct CliArgs {
     config_path: Option<String>,
-    backend_url: Option<String>,
     disable_streaming: bool,
 }
 
@@ -38,7 +38,6 @@ impl CliArgs {
         let mut args = env::args().skip(1);
         let mut parsed = CliArgs {
             config_path: None,
-            backend_url: None,
             disable_streaming: false,
         };
 
@@ -51,14 +50,6 @@ impl CliArgs {
                         std::process::exit(1);
                     });
                     parsed.config_path = Some(value);
-                }
-                "--backend-url" => {
-                    let value = args.next().unwrap_or_else(|| {
-                        eprintln!("Missing value for --backend-url");
-                        print_usage();
-                        std::process::exit(1);
-                    });
-                    parsed.backend_url = Some(value);
                 }
                 "--no-stream" => {
                     parsed.disable_streaming = true;
@@ -80,7 +71,7 @@ impl CliArgs {
 }
 
 fn print_usage() {
-    eprintln!("Usage: geyserbench [--config <PATH>] [--backend-url <URL>] [--no-stream]");
+    eprintln!("Usage: geyserbench [--config <PATH>] [--no-stream]");
 }
 
 #[tokio::main]
@@ -108,13 +99,12 @@ async fn main() -> Result<()> {
     let aborted = Arc::new(AtomicBool::new(false));
 
     let mut backend_settings = config.backend.clone();
-    if let Some(url) = cli.backend_url {
-        backend_settings.url = Some(url);
-        backend_settings.enabled = true;
-    }
     if cli.disable_streaming {
         backend_settings.enabled = false;
+    } else {
+        backend_settings.enabled = true;
     }
+    backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;
     let mut signature_sender = None;
