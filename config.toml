@@ -1,14 +1,14 @@
 [config]
-transactions = 10000
+transactions = 1000
 account = "ComputeBudget111111111111111111111111111111"
 commitment = "processed"
 
 [[endpoint]]
-name = "Corvus aRPC"
+name = "Endpoint 1"
 url = "http://fra.corvus-labs.io:20202"
 kind = "arpc"
 
 [[endpoint]]
-name = "Corvus gRPC"
+name = "Endpoint 2"
 url = "http://fra.corvus-labs.io:10101"
 kind = "yellowstone"
