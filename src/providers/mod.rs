@@ -1,4 +1,4 @@
-use crossbeam_channel::Sender;
+use crossbeam_queue::ArrayQueue;
 use std::{
     error::Error,
     sync::{
@@ -49,7 +49,7 @@ pub struct ProviderContext {
     pub start_wallclock_secs: f64,
     pub start_instant: Instant,
     pub comparator: Arc<Comparator>,
-    pub signature_tx: Option<Sender<SignatureEnvelope>>,
+    pub signature_tx: Option<Arc<ArrayQueue<SignatureEnvelope>>>,
     pub shared_counter: Arc<AtomicUsize>,
     pub shared_shutdown: Arc<AtomicBool>,
     pub target_transactions: Option<usize>,

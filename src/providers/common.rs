@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crossbeam_channel::{Sender, TrySendError};
+use crossbeam_queue::ArrayQueue;
 use tracing::{error, warn};
 
 use crate::{
@@ -81,18 +81,12 @@ pub fn build_signature_envelope(
 }
 
 pub fn enqueue_signature(
-    sender: &Sender<SignatureEnvelope>,
+    sender: &Arc<ArrayQueue<SignatureEnvelope>>,
     endpoint: &str,
     signature: &str,
     envelope: SignatureEnvelope,
 ) {
-    match sender.try_send(envelope) {
-        Ok(_) => {}
-        Err(TrySendError::Full(_)) => {
-            warn!(endpoint = endpoint, signature = %signature, "Signature queue full; dropping observation");
-        }
-        Err(TrySendError::Disconnected(_)) => {
-            warn!(endpoint = endpoint, signature = %signature, "Signature queue closed; dropping observation");
-        }
+    if sender.push(envelope).is_err() {
+        warn!(endpoint = endpoint, signature = %signature, "Signature queue full; dropping observation");
     }
 }

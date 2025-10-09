@@ -32,7 +32,7 @@ hex = "0.4"
 url = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-crossbeam-channel = "0.5"
+crossbeam-queue = "0.3"
 
 [build-dependencies]
 tonic-prost-build = "0.14"

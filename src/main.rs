@@ -10,7 +10,7 @@ pub use {
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         thread,
-        time::Instant,
+        time::{Duration, Instant},
     },
     tokio::{signal::ctrl_c, sync::broadcast, task},
 };
@@ -23,7 +23,7 @@ mod utils;
 
 use anyhow::{Result, anyhow};
 use backend::{BackendStatus, StreamOptions};
-use crossbeam_channel::Sender;
+use crossbeam_queue::ArrayQueue;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use utils::{Comparator, ProgressTracker, get_current_timestamp};
@@ -116,8 +116,9 @@ async fn main() -> Result<()> {
     backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;
-    let mut signature_sender: Option<Sender<backend::SignatureEnvelope>> = None;
+    let mut signature_queues: Option<Vec<Arc<ArrayQueue<backend::SignatureEnvelope>>>> = None;
     let mut signature_forwarder: Option<thread::JoinHandle<()>> = None;
+    let mut forwarder_stop: Option<Arc<AtomicBool>> = None;
     let mut backend_run_id = None;
 
     if backend_settings.enabled {
@@ -131,9 +132,12 @@ async fn main() -> Result<()> {
         info!(run_id = %run_id, "Streaming backend session initialised");
         backend_run_id = Some(run_id.clone());
 
-        let (queue_tx, queue_rx) =
-            crossbeam_channel::bounded::<backend::SignatureEnvelope>(SIGNATURE_QUEUE_CAPACITY);
-        signature_sender = Some(queue_tx.clone());
+        let mut queues = Vec::with_capacity(config.endpoint.len());
+        for _ in 0..config.endpoint.len() {
+            queues.push(Arc::new(ArrayQueue::new(SIGNATURE_QUEUE_CAPACITY)));
+        }
+        let queue_handles = queues.iter().map(Arc::clone).collect::<Vec<_>>();
+        signature_queues = Some(queues);
 
         let mut status_rx = handle.status();
         let shutdown_for_backend = shutdown_tx.clone();
@@ -157,12 +161,29 @@ async fn main() -> Result<()> {
 
         let backend_sender = handle.signature_sender();
         let run_id_for_forwarder = run_id.clone();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        forwarder_stop = Some(stop_flag.clone());
         let forwarder = thread::spawn(move || {
-            while let Ok(envelope) = queue_rx.recv() {
-                let signature_id = envelope.signature.clone();
-                if backend_sender.blocking_send(envelope).is_err() {
-                    warn!(run_id = %run_id_for_forwarder, signature = %signature_id, "Failed to forward signature to backend");
+            let queue_handles = queue_handles;
+            loop {
+                let mut did_work = false;
+                for queue in &queue_handles {
+                    while let Some(envelope) = queue.pop() {
+                        did_work = true;
+                        if backend_sender.blocking_send(envelope).is_err() {
+                            warn!(run_id = %run_id_for_forwarder, "Failed to forward signature to backend");
+                            return;
+                        }
+                    }
+                }
+
+                let should_stop = stop_flag.load(Ordering::Acquire);
+                if should_stop && queue_handles.iter().all(|queue| queue.is_empty()) {
                     break;
+                }
+
+                if !did_work {
+                    thread::sleep(Duration::from_millis(1));
                 }
             }
         });
@@ -182,16 +203,19 @@ async fn main() -> Result<()> {
     let progress_tracker = global_target.map(|target| Arc::new(ProgressTracker::new(target)));
 
     let total_producers = config.endpoint.len();
-    for endpoint in config.endpoint.clone() {
+    for (index, endpoint) in config.endpoint.clone().into_iter().enumerate() {
         let provider = providers::create_provider(&endpoint.kind);
         let shared_config = config.config.clone();
+        let signature_queue = signature_queues
+            .as_ref()
+            .and_then(|queues| queues.get(index).cloned());
         let context = providers::ProviderContext {
             shutdown_tx: shutdown_tx.clone(),
             shutdown_rx: shutdown_tx.subscribe(),
             start_wallclock_secs: start_time,
             start_instant,
             comparator: comparator.clone(),
-            signature_tx: signature_sender.clone(),
+            signature_tx: signature_queue,
             shared_counter: shared_counter.clone(),
             shared_shutdown: shared_shutdown.clone(),
             target_transactions: global_target,
@@ -231,8 +255,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    drop(signature_sender);
-
     let run_aborted = aborted.load(Ordering::Acquire);
 
     let run_summary = if !run_aborted {
@@ -266,6 +288,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
+    }
+
+    let _ = signature_queues.take();
+    if let Some(stop) = forwarder_stop.as_ref() {
+        stop.store(true, Ordering::Release);
     }
 
     if let Some(join) = signature_forwarder
