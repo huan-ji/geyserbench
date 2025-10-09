@@ -31,8 +31,10 @@ fn ensure_protoc() -> core::result::Result<(), protoc_bin_vendored::Error> {
     let protoc = protoc_bin_vendored::protoc_bin_path()?;
     let include_path = protoc_bin_vendored::include_path()?;
 
-    env::set_var(PROTOC, &protoc);
-    env::set_var(PROTOC_INCLUDE, &include_path);
+    unsafe {
+        env::set_var(PROTOC, &protoc);
+        env::set_var(PROTOC_INCLUDE, &include_path);
+    }
 
     Ok(())
 }

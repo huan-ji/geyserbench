@@ -1,17 +1,20 @@
-use futures::{channel::mpsc::unbounded, SinkExt};
+use futures::{SinkExt, channel::mpsc::unbounded};
 use futures_util::stream::StreamExt;
 use solana_pubkey::Pubkey;
 use std::{collections::HashMap, error::Error, sync::atomic::Ordering};
 use tokio::task;
+use tracing::{Level, info};
 
 use crate::{
     config::{Config, Endpoint},
-    utils::{get_current_timestamp, open_log_file, write_log_entry, TransactionData},
+    utils::{TransactionData, get_current_timestamp, open_log_file, write_log_entry},
 };
 
 use super::{
-    common::{fatal_connection_error, TransactionAccumulator},
     GeyserProvider, ProviderContext,
+    common::{
+        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
+    },
 };
 
 #[allow(clippy::all, dead_code)]
@@ -45,13 +48,17 @@ async fn process_jetstream_endpoint(
         start_wallclock_secs,
         start_instant,
         comparator,
+        signature_tx,
+        shared_counter,
+        shared_shutdown,
         target_transactions,
-        completion_counter,
         total_producers,
+        progress,
     } = context;
+    let signature_sender = signature_tx;
     let account_pubkey = config.account.parse::<Pubkey>()?;
     let endpoint_name = endpoint.name.clone();
-    let mut log_file = if log::log_enabled!(log::Level::Trace) {
+    let mut log_file = if tracing::enabled!(Level::TRACE) {
         Some(open_log_file(&endpoint_name)?)
     } else {
         None
@@ -59,16 +66,12 @@ async fn process_jetstream_endpoint(
 
     let endpoint_url = endpoint.url.clone();
 
-    log::info!(
-        "[{}] Connecting to endpoint: {}",
-        endpoint_name,
-        endpoint_url
-    );
+    info!(endpoint = %endpoint_name, url = %endpoint_url, "Connecting");
 
     let mut client = JetstreamClient::connect(endpoint_url.clone())
         .await
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
-    log::info!("[{}] Connected successfully", endpoint_name);
+    info!(endpoint = %endpoint_name, "Connected");
 
     let mut transactions: HashMap<String, jetstream::SubscribeRequestFilterTransactions> =
         HashMap::new();
@@ -93,65 +96,67 @@ async fn process_jetstream_endpoint(
     let mut stream = client.subscribe(subscribe_rx).await?.into_inner();
 
     let mut accumulator = TransactionAccumulator::new();
-    let mut reached_target = false;
 
     let mut transaction_count = 0usize;
 
     loop {
         tokio::select! { biased;
             _ = shutdown_rx.recv() => {
-                log::info!("[{}] Received stop signal...", endpoint_name);
+                info!(endpoint = %endpoint_name, "Received stop signal");
                 break;
             }
 
             message = stream.next() => {
-                if let Some(Ok(msg)) = message {
-                    if let Some(jetstream::subscribe_update::UpdateOneof::Transaction(tx)) = msg.update_oneof {
-                        if let Some(tx_info) = &tx.transaction {
-                            let has_account = tx_info
-                                .account_keys
-                                .iter()
-                                .any(|key| key.as_slice() == account_pubkey.as_ref());
+                let Some(Ok(msg)) = message else { continue };
+                let Some(jetstream::subscribe_update::UpdateOneof::Transaction(tx)) = msg.update_oneof else { continue };
+                let Some(tx_info) = &tx.transaction else { continue };
 
-                            if has_account {
-                                let wallclock = get_current_timestamp();
-                                let elapsed = start_instant.elapsed();
-                                let signature = bs58::encode(&tx_info.signature).into_string();
+                let has_account = tx_info
+                    .account_keys
+                    .iter()
+                    .any(|key| key.as_slice() == account_pubkey.as_ref());
+                if !has_account { continue }
 
-                                if let Some(file) = log_file.as_mut() {
-                                    write_log_entry(file, wallclock, &endpoint_name, &signature)?;
-                                }
+                let wallclock = get_current_timestamp();
+                let elapsed = start_instant.elapsed();
+                let signature = bs58::encode(&tx_info.signature).into_string();
 
-                                accumulator.record(
-                                    signature,
-                                    TransactionData {
-                                        wallclock_secs: wallclock,
-                                        elapsed_since_start: elapsed,
-                                        start_wallclock_secs,
-                                    },
-                                );
+                if let Some(file) = log_file.as_mut() {
+                    write_log_entry(file, wallclock, &endpoint_name, &signature)?;
+                }
 
-                                transaction_count += 1;
-                                if let Some(target) = target_transactions {
-                                    if !reached_target && transaction_count >= target {
-                                        reached_target = true;
-                                        let completed = completion_counter
-                                            .fetch_add(1, Ordering::AcqRel)
-                                            + 1;
-                                        let required = total_producers.max(1);
-                                        if completed >= required {
-                                            log::info!(
-                                                "All endpoints reached target {}; broadcasting shutdown",
-                                                target
-                                            );
-                                            let _ = shutdown_tx.send(());
-                                        }
-                                    }
-                                }
-                            }
+                let tx_data = TransactionData {
+                    wallclock_secs: wallclock,
+                    elapsed_since_start: elapsed,
+                    start_wallclock_secs,
+                };
+
+                let updated = accumulator.record(signature.clone(), tx_data.clone());
+
+                if updated && let Some(envelope) = build_signature_envelope(
+                    &comparator,
+                    &endpoint_name,
+                    &signature,
+                    tx_data,
+                    total_producers,
+                ) {
+                    if let Some(target) = target_transactions {
+                        let shared = shared_counter.fetch_add(1, Ordering::AcqRel) + 1;
+                        if let Some(tracker) = progress.as_ref() {
+                            tracker.record(shared);
+                        }
+                        if shared >= target && !shared_shutdown.swap(true, Ordering::AcqRel) {
+                            info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
+                            let _ = shutdown_tx.send(());
                         }
                     }
+
+                    if let Some(sender) = signature_sender.as_ref() {
+                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
+                    }
                 }
+
+                transaction_count += 1;
             }
         }
     }
@@ -159,11 +164,11 @@ async fn process_jetstream_endpoint(
     let unique_signatures = accumulator.len();
     let collected = accumulator.into_inner();
     comparator.add_batch(&endpoint_name, collected);
-    log::info!(
-        "[{}] Stream closed after dispatching {} transactions (unique signatures: {})",
-        endpoint_name,
-        transaction_count,
-        unique_signatures
+    info!(
+        endpoint = %endpoint_name,
+        total_transactions = transaction_count,
+        unique_signatures,
+        "Stream closed after dispatching transactions"
     );
     Ok(())
 }

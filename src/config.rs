@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use yellowstone_grpc_proto::geyser::CommitmentLevel;
@@ -7,6 +7,8 @@ use yellowstone_grpc_proto::geyser::CommitmentLevel;
 pub struct ConfigToml {
     pub config: Config,
     pub endpoint: Vec<Endpoint>,
+    #[serde(default)]
+    pub backend: BackendSettings,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -23,6 +25,14 @@ pub struct Endpoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x_token: Option<String>,
     pub kind: EndpointKind,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+pub struct BackendSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
@@ -51,6 +61,29 @@ impl From<ArgsCommitment> for CommitmentLevel {
             ArgsCommitment::Processed => CommitmentLevel::Processed,
             ArgsCommitment::Confirmed => CommitmentLevel::Confirmed,
             ArgsCommitment::Finalized => CommitmentLevel::Finalized,
+        }
+    }
+}
+
+impl ArgsCommitment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ArgsCommitment::Processed => "processed",
+            ArgsCommitment::Confirmed => "confirmed",
+            ArgsCommitment::Finalized => "finalized",
+        }
+    }
+}
+
+impl EndpointKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EndpointKind::Yellowstone => "yellowstone",
+            EndpointKind::Arpc => "arpc",
+            EndpointKind::Thor => "thor",
+            EndpointKind::Shredstream => "shredstream",
+            EndpointKind::Shreder => "shreder",
+            EndpointKind::Jetstream => "jetstream",
         }
     }
 }
@@ -84,6 +117,7 @@ impl ConfigToml {
                     kind: EndpointKind::Arpc,
                 },
             ],
+            backend: BackendSettings::default(),
         };
 
         let toml_string = toml::to_string_pretty(&default_config)

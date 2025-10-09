@@ -1,13 +1,18 @@
+use crossbeam_queue::ArrayQueue;
 use std::{
     error::Error,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize},
+    },
     time::Instant,
 };
 use tokio::sync::broadcast;
 
 use crate::{
+    backend::SignatureEnvelope,
     config::{Config, Endpoint, EndpointKind},
-    utils::Comparator,
+    utils::{Comparator, ProgressTracker},
 };
 
 pub mod arpc;
@@ -44,7 +49,10 @@ pub struct ProviderContext {
     pub start_wallclock_secs: f64,
     pub start_instant: Instant,
     pub comparator: Arc<Comparator>,
+    pub signature_tx: Option<Arc<ArrayQueue<SignatureEnvelope>>>,
+    pub shared_counter: Arc<AtomicUsize>,
+    pub shared_shutdown: Arc<AtomicBool>,
     pub target_transactions: Option<usize>,
-    pub completion_counter: Arc<AtomicUsize>,
     pub total_producers: usize,
+    pub progress: Option<Arc<ProgressTracker>>,
 }

@@ -1,5 +1,7 @@
-use crate::utils::{percentile, Comparator, TransactionData};
+use crate::utils::{Comparator, TransactionData, percentile};
 use comfy_table::{ContentArrangement, Table};
+use serde_json::{Map, Value, json};
+use std::cmp::Ordering;
 
 #[cfg(target_os = "windows")]
 #[inline]
@@ -23,22 +25,28 @@ pub struct EndpointStats {
     pub backfill_transactions: usize,
 }
 
-#[derive(Debug, Default)]
-struct EndpointSummary {
-    name: String,
-    first_share: f64,
-    avg_delay_ms: Option<f64>,
-    median_delay_ms: Option<f64>,
-    p95_delay_ms: Option<f64>,
-    min_delay_ms: Option<f64>,
-    max_delay_ms: Option<f64>,
-    valid_transactions: usize,
-    first_detections: usize,
-    backfill_transactions: usize,
+#[derive(Debug, Default, Clone)]
+pub struct EndpointSummary {
+    pub name: String,
+    pub first_share: f64,
+    pub p50_delay_ms: Option<f64>,
+    pub p95_delay_ms: Option<f64>,
+    pub p99_delay_ms: Option<f64>,
+    pub valid_transactions: usize,
+    pub first_detections: usize,
+    pub backfill_transactions: usize,
 }
 
-pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
+#[derive(Debug, Clone)]
+pub struct RunSummary {
+    pub endpoints: Vec<EndpointSummary>,
+    pub fastest_endpoint: Option<String>,
+    pub has_data: bool,
+}
+
+pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -> RunSummary {
     let mut endpoint_stats: HashMap<String, EndpointStats> = HashMap::new();
+    let expected_producers = endpoint_names.len();
 
     for endpoint_name in endpoint_names {
         endpoint_stats.insert(endpoint_name.clone(), EndpointStats::default());
@@ -46,6 +54,10 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
 
     for sig_entry in comparator.iter() {
         let sig_data = sig_entry.value();
+        if expected_producers > 0 && sig_data.len() != expected_producers {
+            // Skip partial observations to mirror backend results
+            continue;
+        }
 
         let is_historical = sig_data
             .values()
@@ -69,12 +81,12 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
             }
 
             for (endpoint, tx) in sig_data.iter() {
-                if endpoint != first_endpoint {
-                    if let Some(stats) = endpoint_stats.get_mut(endpoint) {
-                        let delay_ms = diff_ms(tx, first_tx);
-                        stats.delays.push(delay_ms);
-                        stats.total_valid_transactions += 1;
-                    }
+                if endpoint != first_endpoint
+                    && let Some(stats) = endpoint_stats.get_mut(endpoint)
+                {
+                    let delay_ms = diff_ms(tx, first_tx);
+                    stats.delays.push(delay_ms);
+                    stats.total_valid_transactions += 1;
                 }
             }
         }
@@ -85,41 +97,38 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
         .map(|stats| stats.first_detections)
         .sum();
 
-    let summaries: Vec<EndpointSummary> = endpoint_stats
+    let endpoints: Vec<EndpointSummary> = endpoint_stats
         .into_iter()
         .map(|(endpoint, stats)| build_summary(endpoint, stats, total_first_detections))
         .collect();
 
-    let mut summary_rows: Vec<&EndpointSummary> = summaries.iter().collect();
-    summary_rows.sort_by(|a, b| {
-        b.first_share
-            .partial_cmp(&a.first_share)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| match (a.avg_delay_ms, b.avg_delay_ms) {
-                (Some(lhs), Some(rhs)) => {
-                    lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
-                }
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.name.cmp(&b.name),
-            })
-    });
-
-    println!("\nFinished test results");
-    println!("--------------------------------------------");
-
-    let has_data = summary_rows
+    let has_data = endpoints
         .iter()
         .any(|summary| summary.valid_transactions > 0);
 
-    if !has_data {
+    let fastest_endpoint = endpoints
+        .iter()
+        .filter(|summary| summary.valid_transactions > 0)
+        .min_by(|a, b| compare_latency(a, b))
+        .map(|summary| summary.name.clone());
+
+    RunSummary {
+        endpoints,
+        fastest_endpoint,
+        has_data,
+    }
+}
+
+pub fn display_run_summary(summary: &RunSummary) {
+    println!("\nFinished test results");
+    println!("--------------------------------------------");
+
+    if !summary.has_data {
         println!("Not enough data");
     } else {
-        let fastest_summary = summary_rows
-            .iter()
-            .copied()
-            .find(|summary| summary.valid_transactions > 0);
-        let fastest_name = fastest_summary.map(|summary| summary.name.as_str());
+        let fastest_name_ref = summary.fastest_endpoint.as_deref();
+        let mut summary_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
+        summary_rows.sort_by(|a, b| compare_latency(a, b));
 
         for summary in summary_rows {
             if summary.valid_transactions == 0 {
@@ -133,20 +142,19 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
             } else {
                 format!("{}%", raw_win_rate)
             };
-            let mut avg_delay = summary.avg_delay_ms.unwrap_or(0.0);
-            let is_fastest = fastest_name == Some(summary.name.as_str());
+            let is_fastest = fastest_name_ref == Some(summary.name.as_str());
 
             if is_fastest {
-                avg_delay = 0.0;
                 println!(
-                    "{}: Win rate {}, avg delay {:.2}ms (fastest)",
-                    summary.name, win_rate, avg_delay
+                    "{}: Win rate {}, p50 0.00ms (fastest)",
+                    summary.name, win_rate,
                 );
             } else {
-                println!(
-                    "{}: Win rate {}, avg delay {:.2}ms",
-                    summary.name, win_rate, avg_delay
-                );
+                let p50_delay = summary
+                    .p50_delay_ms
+                    .map(|v| format!("{:.2}ms", v))
+                    .unwrap_or_else(|| "—".to_string());
+                println!("{}: Win rate {}, p50 {}", summary.name, win_rate, p50_delay);
             }
         }
     }
@@ -154,42 +162,30 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
     println!("\nDetailed test results");
     println!("--------------------------------------------");
 
-    if !has_data {
+    if !summary.has_data {
         println!("Not enough data");
         return;
     }
 
-    let mut table_rows: Vec<&EndpointSummary> = summaries.iter().collect();
-    table_rows.sort_by(|a, b| match (a.avg_delay_ms, b.avg_delay_ms) {
-        (Some(lhs), Some(rhs)) => lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.name.cmp(&b.name),
-    });
+    let mut table_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
+    table_rows.sort_by(|a, b| compare_latency(a, b));
 
     let mut table = Table::new();
     table.load_preset(table_preset());
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec![
-        "Endpoint",
-        "First %",
-        "Avg ms",
-        "Median ms",
-        "P95 ms",
-        "Min/Max ms",
-        "Valid Tx",
-        "Firsts",
-        "Backfill",
+        "Endpoint", "First %", "P50 ms", "P95 ms", "P99 ms", "Valid Tx", "Firsts", "Backfill",
     ]);
 
+    let fastest_name_ref = summary.fastest_endpoint.as_deref();
     for summary in table_rows {
+        let is_fastest = fastest_name_ref == Some(summary.name.as_str());
         table.add_row(vec![
             summary.name.clone(),
             format_percent(summary.first_share),
-            format_option(summary.avg_delay_ms),
-            format_option(summary.median_delay_ms),
-            format_option(summary.p95_delay_ms),
-            format_min_max(summary.min_delay_ms, summary.max_delay_ms),
+            format_latency_value(summary.p50_delay_ms, is_fastest),
+            format_latency_value(summary.p95_delay_ms, is_fastest),
+            format_latency_value(summary.p99_delay_ms, is_fastest),
             summary.valid_transactions.to_string(),
             summary.first_detections.to_string(),
             summary.backfill_transactions.to_string(),
@@ -197,6 +193,24 @@ pub fn analyze_delays(comparator: &Comparator, endpoint_names: &[String]) {
     }
 
     println!("{}", table);
+}
+
+pub fn build_metrics_report(summary: &RunSummary) -> Value {
+    let mut per_endpoint = Map::new();
+    for endpoint in &summary.endpoints {
+        let payload = json!({
+            "first_detection_rate": endpoint.first_share,
+            "p50_latency_ms": endpoint.p50_delay_ms,
+            "p95_latency_ms": endpoint.p95_delay_ms,
+            "p99_latency_ms": endpoint.p99_delay_ms,
+            "observations": endpoint.valid_transactions,
+            "first_detections": endpoint.first_detections,
+            "backfill_transactions": endpoint.backfill_transactions,
+        });
+        per_endpoint.insert(endpoint.name.clone(), payload);
+    }
+
+    json!({ "per_endpoint": per_endpoint })
 }
 
 fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {
@@ -226,20 +240,34 @@ fn build_summary(
     if !stats.delays.is_empty() {
         let mut sorted = stats.delays.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        summary.avg_delay_ms = Some(sorted.iter().sum::<f64>() / sorted.len() as f64);
-        summary.median_delay_ms = Some(percentile(&sorted, 0.5));
+        summary.p50_delay_ms = Some(percentile(&sorted, 0.5));
         summary.p95_delay_ms = Some(percentile(&sorted, 0.95));
-        summary.min_delay_ms = Some(*sorted.first().unwrap());
-        summary.max_delay_ms = Some(*sorted.last().unwrap());
+        summary.p99_delay_ms = Some(percentile(&sorted, 0.99));
     }
 
     summary
 }
 
-fn format_option(value: Option<f64>) -> String {
-    value
-        .map(|v| format!("{:.2}", v))
-        .unwrap_or_else(|| "—".to_string())
+fn format_latency_value(value: Option<f64>, is_fastest: bool) -> String {
+    if is_fastest {
+        "-".to_string()
+    } else {
+        value
+            .map(|v| format!("{:.2}", v))
+            .unwrap_or_else(|| "—".to_string())
+    }
+}
+
+fn compare_latency(lhs: &EndpointSummary, rhs: &EndpointSummary) -> Ordering {
+    match (lhs.p50_delay_ms, rhs.p50_delay_ms) {
+        (Some(l), Some(r)) => l
+            .partial_cmp(&r)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| lhs.name.cmp(&rhs.name)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => lhs.name.cmp(&rhs.name),
+    }
 }
 
 fn format_percent(value: f64) -> String {
@@ -247,12 +275,5 @@ fn format_percent(value: f64) -> String {
         format!("{:.2}", value * 100.0)
     } else {
         "—".to_string()
-    }
-}
-
-fn format_min_max(min: Option<f64>, max: Option<f64>) -> String {
-    match (min, max) {
-        (Some(mi), Some(ma)) => format!("{:.2}/{:.2}", mi, ma),
-        _ => "—".to_string(),
     }
 }
