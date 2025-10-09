@@ -11,8 +11,7 @@ GeyserBench is a performance testing tool that connects to multiple Solana gRPC 
 - Connect to multiple gRPC endpoints simultaneously
 - Measure endpoint performance metrics:
     - First detection rate
-    - Average delay
-    - Median and 95th percentile latency
+    - Latency percentiles (p50, p95, p99)
 - Simple summary output for quick comparison
 - Detailed metrics for in-depth analysis
 
@@ -93,25 +92,30 @@ GeyserBench provides both simplified and detailed output:
 
 ### Simple Summary
 ```
-Finished tests results
-endpoint 1: Win rate 85.23%, avg delay 0.00ms (fastest)
-endpoint 2: Win rate 10.45%, avg delay 42.31ms
-endpoint 3: Win rate 4.32%, avg delay 78.56ms
+Finished test results
+endpoint 1: Win rate 85.23%, p50 0.00ms (fastest)
+endpoint 2: Win rate 10.45%, p50 42.31ms
+endpoint 3: Win rate 4.32%, p50 78.56ms
 ```
 
 ### Detailed Metrics
 ```
-Detailed tests results
+Detailed test results
 ----------------------------------
 
 Fastest Endpoint: endpoint 1
   First detections: 82 out of 97 valid transactions (84.54%)
-  
+
 Delays relative to fastest endpoint:
 endpoint 2:
-  Average delay: 42.31 ms
-  Median delay: 38.75 ms
-  95th percentile: 62.18 ms
-  Min/Max delay: 12.45/89.32 ms
+  P50 latency: 38.75 ms
+  P95 latency: 62.18 ms
+  P99 latency: 84.03 ms
+  Valid transactions: 97
+
+endpoint 3:
+  P50 latency: 71.22 ms
+  P95 latency: 121.57 ms
+  P99 latency: 189.45 ms
   Valid transactions: 97
 ```

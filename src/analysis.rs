@@ -1,5 +1,7 @@
 use crate::utils::{Comparator, TransactionData, percentile};
 use comfy_table::{ContentArrangement, Table};
+use serde_json::{Map, Value, json};
+use std::cmp::Ordering;
 
 #[cfg(target_os = "windows")]
 #[inline]
@@ -44,6 +46,7 @@ pub struct RunSummary {
 
 pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -> RunSummary {
     let mut endpoint_stats: HashMap<String, EndpointStats> = HashMap::new();
+    let expected_producers = endpoint_names.len();
 
     for endpoint_name in endpoint_names {
         endpoint_stats.insert(endpoint_name.clone(), EndpointStats::default());
@@ -51,6 +54,10 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
 
     for sig_entry in comparator.iter() {
         let sig_data = sig_entry.value();
+        if expected_producers > 0 && sig_data.len() != expected_producers {
+            // Skip partial observations to mirror backend results
+            continue;
+        }
 
         let is_historical = sig_data
             .values()
@@ -102,12 +109,7 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
     let fastest_endpoint = endpoints
         .iter()
         .filter(|summary| summary.valid_transactions > 0)
-        .min_by(|a, b| match (a.p50_delay_ms, b.p50_delay_ms) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => std::cmp::Ordering::Less,
-            (Some(_), None) => std::cmp::Ordering::Greater,
-            (Some(lhs), Some(rhs)) => lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal),
-        })
+        .min_by(|a, b| compare_latency(a, b))
         .map(|summary| summary.name.clone());
 
     RunSummary {
@@ -126,19 +128,7 @@ pub fn display_run_summary(summary: &RunSummary) {
     } else {
         let fastest_name_ref = summary.fastest_endpoint.as_deref();
         let mut summary_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
-        summary_rows.sort_by(|a, b| {
-            b.first_share
-                .partial_cmp(&a.first_share)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| match (a.p50_delay_ms, b.p50_delay_ms) {
-                    (Some(lhs), Some(rhs)) => {
-                        lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
-                    }
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.name.cmp(&b.name),
-                })
-        });
+        summary_rows.sort_by(|a, b| compare_latency(a, b));
 
         for summary in summary_rows {
             if summary.valid_transactions == 0 {
@@ -178,12 +168,7 @@ pub fn display_run_summary(summary: &RunSummary) {
     }
 
     let mut table_rows: Vec<&EndpointSummary> = summary.endpoints.iter().collect();
-    table_rows.sort_by(|a, b| match (a.p50_delay_ms, b.p50_delay_ms) {
-        (Some(lhs), Some(rhs)) => lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.name.cmp(&b.name),
-    });
+    table_rows.sort_by(|a, b| compare_latency(a, b));
 
     let mut table = Table::new();
     table.load_preset(table_preset());
@@ -208,6 +193,24 @@ pub fn display_run_summary(summary: &RunSummary) {
     }
 
     println!("{}", table);
+}
+
+pub fn build_metrics_report(summary: &RunSummary) -> Value {
+    let mut per_endpoint = Map::new();
+    for endpoint in &summary.endpoints {
+        let payload = json!({
+            "first_detection_rate": endpoint.first_share,
+            "p50_latency_ms": endpoint.p50_delay_ms,
+            "p95_latency_ms": endpoint.p95_delay_ms,
+            "p99_latency_ms": endpoint.p99_delay_ms,
+            "observations": endpoint.valid_transactions,
+            "first_detections": endpoint.first_detections,
+            "backfill_transactions": endpoint.backfill_transactions,
+        });
+        per_endpoint.insert(endpoint.name.clone(), payload);
+    }
+
+    json!({ "per_endpoint": per_endpoint })
 }
 
 fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {
@@ -252,6 +255,18 @@ fn format_latency_value(value: Option<f64>, is_fastest: bool) -> String {
         value
             .map(|v| format!("{:.2}", v))
             .unwrap_or_else(|| "—".to_string())
+    }
+}
+
+fn compare_latency(lhs: &EndpointSummary, rhs: &EndpointSummary) -> Ordering {
+    match (lhs.p50_delay_ms, rhs.p50_delay_ms) {
+        (Some(l), Some(r)) => l
+            .partial_cmp(&r)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| lhs.name.cmp(&rhs.name)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => lhs.name.cmp(&rhs.name),
     }
 }
 

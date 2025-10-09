@@ -1,4 +1,7 @@
-use crate::config::{Config, Endpoint};
+use crate::{
+    config::{Config, Endpoint},
+    utils::get_current_timestamp,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use blake3::Hasher;
 use futures_util::{SinkExt, StreamExt};
@@ -47,6 +50,8 @@ pub struct BackendHandle {
     command_tx: mpsc::Sender<BackendCommand>,
     status_rx: watch::Receiver<BackendStatus>,
     run_id: String,
+    clock_offset_ms: f64,
+    server_started_at_unix_ms: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -85,6 +90,8 @@ enum InboundMessage {
     StartAck {
         run_id: String,
         session_nonce: String,
+        #[serde(default)]
+        started_at_unix_ms: Option<i64>,
     },
     Completed {
         data: Value,
@@ -96,6 +103,13 @@ enum InboundMessage {
     },
     #[serde(other)]
     Other,
+}
+
+struct StartAckDetails {
+    run_id: String,
+    session_nonce: [u8; 32],
+    started_at_unix_ms: Option<i64>,
+    clock_offset_ms: f64,
 }
 
 #[derive(Serialize)]
@@ -147,14 +161,25 @@ pub async fn connect_stream(
 
     let start_json =
         serde_json::to_string(&start_message).context("failed to serialise start message")?;
+    let t_send_ms = get_current_timestamp() * 1_000.0;
     socket
         .send(Message::Text(start_json))
         .await
         .context("failed to send start message")?;
 
-    let (run_id, session_nonce) = wait_for_start_ack(&mut socket).await?;
+    let StartAckDetails {
+        run_id,
+        session_nonce,
+        started_at_unix_ms,
+        clock_offset_ms,
+    } = wait_for_start_ack(&mut socket, t_send_ms).await?;
 
-    info!(run_id = %run_id, "Streaming backend acknowledged run");
+    info!(
+        run_id = %run_id,
+        started_at_unix_ms,
+        clock_offset_ms,
+        "Streaming backend acknowledged run"
+    );
     let _ = status_tx.send(BackendStatus::Ready {
         run_id: run_id.clone(),
     });
@@ -174,6 +199,8 @@ pub async fn connect_stream(
         command_tx,
         status_rx,
         run_id,
+        clock_offset_ms,
+        server_started_at_unix_ms: started_at_unix_ms,
     })
 }
 
@@ -190,6 +217,14 @@ impl BackendHandle {
 
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub fn clock_offset_ms(&self) -> f64 {
+        self.clock_offset_ms
+    }
+
+    pub fn server_started_at_unix_ms(&self) -> Option<i64> {
+        self.server_started_at_unix_ms
     }
 
     pub async fn finish(mut self) -> Result<BackendCompletion> {
@@ -258,14 +293,17 @@ async fn wait_for_start_ack(
     socket: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-) -> Result<(String, [u8; 32])> {
+    t_send_ms: f64,
+) -> Result<StartAckDetails> {
     while let Some(message) = socket.next().await {
         match message {
             Ok(Message::Text(raw)) => match serde_json::from_str::<InboundMessage>(&raw) {
                 Ok(InboundMessage::StartAck {
                     run_id,
                     session_nonce,
+                    started_at_unix_ms,
                 }) => {
+                    let t_recv_ms = get_current_timestamp() * 1_000.0;
                     let bytes = hex::decode(session_nonce.trim())
                         .context("invalid session nonce received from backend")?;
                     if bytes.len() != 32 {
@@ -273,7 +311,23 @@ async fn wait_for_start_ack(
                     }
                     let mut array = [0u8; 32];
                     array.copy_from_slice(&bytes);
-                    return Ok((run_id, array));
+                    let clock_offset_ms = started_at_unix_ms
+                        .map(|server_ms| server_ms as f64 - ((t_send_ms + t_recv_ms) / 2.0))
+                        .unwrap_or(0.0);
+                    debug!(
+                        run_id = %run_id,
+                        t_send_ms,
+                        t_recv_ms,
+                        server_started_at_unix_ms = started_at_unix_ms,
+                        clock_offset_ms,
+                        "Computed backend clock offset"
+                    );
+                    return Ok(StartAckDetails {
+                        run_id,
+                        session_nonce: array,
+                        started_at_unix_ms,
+                        clock_offset_ms,
+                    });
                 }
                 Ok(InboundMessage::Error { message, run_id }) => {
                     let identifier = run_id.unwrap_or_else(|| "unknown".to_string());
