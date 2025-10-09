@@ -45,7 +45,7 @@ During a run, GeyserBench prints progress updates followed by a side-by-side com
 ```toml
 [config]
 transactions = 1000
-account = "ComputeBudget111111111111111111111111111111"
+account = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 commitment = "processed"  # processed | confirmed | finalized
 
 [[endpoint]]
