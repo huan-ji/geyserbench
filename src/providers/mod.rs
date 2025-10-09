@@ -22,6 +22,7 @@ pub mod shreder;
 pub mod shredstream;
 pub mod thor;
 pub mod yellowstone;
+mod yellowstone_client;
 
 pub trait GeyserProvider: Send + Sync {
     fn process(

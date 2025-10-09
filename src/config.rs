@@ -1,7 +1,7 @@
+use crate::proto::geyser::CommitmentLevel;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use yellowstone_grpc_proto::geyser::CommitmentLevel;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ConfigToml {

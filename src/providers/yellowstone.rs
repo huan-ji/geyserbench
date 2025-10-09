@@ -3,12 +3,12 @@ use std::{collections::HashMap, error::Error, sync::atomic::Ordering};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use solana_pubkey::Pubkey;
 use tokio::task;
+use tonic::transport::ClientTlsConfig;
 use tracing::{Level, error, info, warn};
-use yellowstone_grpc_client::GeyserGrpcClient;
-use yellowstone_grpc_proto::{
-    geyser::{SubscribeRequest, SubscribeRequestPing, subscribe_update::UpdateOneof},
-    prelude::SubscribeRequestFilterTransactions,
-    tonic::transport::ClientTlsConfig,
+
+use crate::proto::geyser::{
+    CommitmentLevel, SubscribeRequest, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+    subscribe_update::UpdateOneof,
 };
 
 use crate::{
@@ -21,6 +21,7 @@ use super::{
     common::{
         TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
     },
+    yellowstone_client::GeyserGrpcClient,
 };
 
 pub struct YellowstoneProvider;
@@ -93,7 +94,7 @@ async fn process_yellowstone_endpoint(
     info!(endpoint = %endpoint_name, "Connected");
 
     let (mut subscribe_tx, mut stream) = client.subscribe().await?;
-    let commitment: yellowstone_grpc_proto::geyser::CommitmentLevel = config.commitment.into();
+    let commitment: CommitmentLevel = config.commitment.into();
 
     let mut transactions = HashMap::new();
     transactions.insert(

@@ -18,6 +18,7 @@ pub use {
 mod analysis;
 mod backend;
 mod config;
+mod proto;
 mod providers;
 mod utils;
 
