@@ -9,6 +9,7 @@ pub use {
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
+        thread,
         time::Instant,
     },
     tokio::{signal::ctrl_c, sync::broadcast, task},
@@ -22,12 +23,14 @@ mod utils;
 
 use anyhow::{Result, anyhow};
 use backend::{BackendStatus, StreamOptions};
+use crossbeam_channel::Sender;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use utils::{Comparator, ProgressTracker, get_current_timestamp};
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
 const DEFAULT_BACKEND_STREAM_URL: &str = "wss://gb.solstack.app/v1/benchmarks/stream";
 const MAX_STREAM_TRANSACTIONS: i32 = 100_000;
+const SIGNATURE_QUEUE_CAPACITY: usize = 1_024;
 
 struct CliArgs {
     config_path: Option<String>,
@@ -113,7 +116,8 @@ async fn main() -> Result<()> {
     backend_settings.url = Some(DEFAULT_BACKEND_STREAM_URL.to_string());
 
     let mut backend_handle = None;
-    let mut signature_sender = None;
+    let mut signature_sender: Option<Sender<backend::SignatureEnvelope>> = None;
+    let mut signature_forwarder: Option<thread::JoinHandle<()>> = None;
     let mut backend_run_id = None;
 
     if backend_settings.enabled {
@@ -126,6 +130,10 @@ async fn main() -> Result<()> {
         let run_id = handle.run_id().to_string();
         info!(run_id = %run_id, "Streaming backend session initialised");
         backend_run_id = Some(run_id.clone());
+
+        let (queue_tx, queue_rx) =
+            crossbeam_channel::bounded::<backend::SignatureEnvelope>(SIGNATURE_QUEUE_CAPACITY);
+        signature_sender = Some(queue_tx.clone());
 
         let mut status_rx = handle.status();
         let shutdown_for_backend = shutdown_tx.clone();
@@ -147,7 +155,18 @@ async fn main() -> Result<()> {
             }
         });
 
-        signature_sender = Some(handle.signature_sender());
+        let backend_sender = handle.signature_sender();
+        let run_id_for_forwarder = run_id.clone();
+        let forwarder = thread::spawn(move || {
+            while let Ok(envelope) = queue_rx.recv() {
+                let signature_id = envelope.signature.clone();
+                if backend_sender.blocking_send(envelope).is_err() {
+                    warn!(run_id = %run_id_for_forwarder, signature = %signature_id, "Failed to forward signature to backend");
+                    break;
+                }
+            }
+        });
+        signature_forwarder = Some(forwarder);
         backend_handle = Some(handle);
     } else {
         info!("Backend streaming disabled; collecting metrics locally");
@@ -214,8 +233,19 @@ async fn main() -> Result<()> {
 
     drop(signature_sender);
 
+    let run_aborted = aborted.load(Ordering::Acquire);
+
+    let run_summary = if !run_aborted {
+        Some(analysis::compute_run_summary(
+            comparator.as_ref(),
+            &endpoint_names,
+        ))
+    } else {
+        None
+    };
+
     if let Some(handle) = backend_handle {
-        if aborted.load(Ordering::Acquire) {
+        if run_aborted {
             if let Some(run_id) = backend_run_id.as_ref() {
                 info!(run_id = %run_id, "Skipping backend finalisation due to user abort");
             } else {
@@ -238,10 +268,19 @@ async fn main() -> Result<()> {
         }
     }
 
-    let run_aborted = aborted.load(Ordering::Acquire);
+    if let Some(join) = signature_forwarder
+        && let Err(err) = join.join()
+    {
+        warn!(
+            "Signature forwarder thread terminated unexpectedly: {:?}",
+            err
+        );
+    }
 
     if !run_aborted {
-        analysis::analyze_delays(comparator.as_ref(), &endpoint_names);
+        if let Some(summary) = run_summary.as_ref() {
+            analysis::display_run_summary(summary);
+        }
 
         if let Some(run_id) = backend_run_id {
             println!("🔗 Share this benchmark run: https://runs.solstack.app/run/{run_id}");

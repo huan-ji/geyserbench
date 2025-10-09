@@ -1,3 +1,4 @@
+use crossbeam_channel::Sender;
 use std::{
     error::Error,
     sync::{
@@ -9,7 +10,7 @@ use std::{
 use tokio::sync::broadcast;
 
 use crate::{
-    backend::SignatureSender,
+    backend::SignatureEnvelope,
     config::{Config, Endpoint, EndpointKind},
     utils::{Comparator, ProgressTracker},
 };
@@ -48,7 +49,7 @@ pub struct ProviderContext {
     pub start_wallclock_secs: f64,
     pub start_instant: Instant,
     pub comparator: Arc<Comparator>,
-    pub signature_tx: Option<SignatureSender>,
+    pub signature_tx: Option<Sender<SignatureEnvelope>>,
     pub shared_counter: Arc<AtomicUsize>,
     pub shared_shutdown: Arc<AtomicBool>,
     pub target_transactions: Option<usize>,

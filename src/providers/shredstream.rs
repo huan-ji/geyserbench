@@ -1,7 +1,7 @@
 use futures_util::stream::StreamExt;
 use std::{error::Error, sync::atomic::Ordering};
 use tokio::task;
-use tracing::{Level, error, info, warn};
+use tracing::{Level, error, info};
 
 use solana_pubkey::Pubkey;
 
@@ -12,7 +12,9 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
+    common::{
+        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
+    },
 };
 
 #[allow(clippy::all, dead_code)]
@@ -148,10 +150,9 @@ async fn process_shredstream_endpoint(
                                 }
                             }
 
-                            if let Some(sender) = signature_sender.as_ref()
-                                && let Err(err) = sender.send(envelope).await {
-                                    warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
-                                }
+                            if let Some(sender) = signature_sender.as_ref() {
+                                enqueue_signature(sender, &endpoint_name, &signature, envelope);
+                            }
                         }
 
                     transaction_count += 1;

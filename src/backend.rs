@@ -213,12 +213,10 @@ impl BackendHandle {
 }
 
 impl SignatureSender {
-    pub async fn send(&self, envelope: SignatureEnvelope) -> Result<()> {
+    pub fn blocking_send(&self, envelope: SignatureEnvelope) -> Result<(), ()> {
         self.inner
-            .send(BackendCommand::Signature(envelope))
-            .await
-            .map_err(|err| anyhow!("backend command channel closed: {}", err))?;
-        Ok(())
+            .blocking_send(BackendCommand::Signature(envelope))
+            .map_err(|_| ())
     }
 }
 

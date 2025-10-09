@@ -18,7 +18,9 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
+    common::{
+        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
+    },
 };
 
 pub struct YellowstoneProvider;
@@ -134,7 +136,7 @@ async fn process_yellowstone_endpoint(
                 match message {
                     Some(Ok(msg)) => {
                         match msg.update_oneof {
-                    Some(UpdateOneof::Transaction(tx_msg)) => {
+                            Some(UpdateOneof::Transaction(tx_msg)) => {
                                 if let Some(tx) = tx_msg.transaction.as_ref()
                                     && let Some(msg) = tx.transaction.as_ref().and_then(|t| t.message.as_ref()) {
                                         let has_account = msg
@@ -192,10 +194,9 @@ async fn process_yellowstone_endpoint(
                                                         }
                                                     }
 
-                                                    if let Some(sender) = signature_sender.as_ref()
-                                                        && let Err(err) = sender.send(envelope).await {
-                                                            warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
-                                                        }
+                                                    if let Some(sender) = signature_sender.as_ref() {
+                                                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
+                                                    }
                                                 }
 
                                             transaction_count += 1;

@@ -4,7 +4,7 @@ use futures::{SinkExt, channel::mpsc::unbounded};
 use futures_util::stream::StreamExt;
 use solana_pubkey::Pubkey;
 use tokio::task;
-use tracing::{Level, info, warn};
+use tracing::{Level, info};
 
 use crate::{
     config::{Config, Endpoint},
@@ -13,7 +13,9 @@ use crate::{
 
 use super::{
     GeyserProvider, ProviderContext,
-    common::{TransactionAccumulator, build_signature_envelope, fatal_connection_error},
+    common::{
+        TransactionAccumulator, build_signature_envelope, enqueue_signature, fatal_connection_error,
+    },
 };
 
 #[allow(clippy::all, dead_code)]
@@ -76,15 +78,14 @@ async fn process_arpc_endpoint(
         .unwrap_or_else(|err| fatal_connection_error(&endpoint_name, err));
     info!(endpoint = %endpoint_name, "Connected");
 
-    let mut transactions = HashMap::new();
-    transactions.insert(
-        String::from("account"),
+    let transactions = HashMap::from([(
+        "account".to_string(),
         SubscribeRequestFilterTransactions {
             account_include: vec![config.account.clone()],
             account_exclude: vec![],
             account_required: vec![],
         },
-    );
+    )]);
 
     let request = ArpcSubscribeRequest {
         transactions,
@@ -106,65 +107,57 @@ async fn process_arpc_endpoint(
             }
 
             message = stream.next() => {
-                if let Some(Ok(msg)) = message
-                    && let Some(tx) = msg.transaction {
-                        let has_account = tx
-                            .account_keys
-                            .iter()
-                            .any(|key| key.as_slice() == account_pubkey.as_ref());
+                let Some(Ok(msg)) = message else { continue };
+                let Some(tx) = msg.transaction else { continue };
 
-                        if has_account {
-                            let wallclock = get_current_timestamp();
-                            let elapsed = start_instant.elapsed();
-                            let signature = bs58::encode(&tx.signatures[0]).into_string();
+                let has_account = tx.account_keys
+                    .iter()
+                    .any(|k| k.as_slice() == account_pubkey.as_ref());
+                if !has_account { continue }
 
-                            if let Some(file) = log_file.as_mut() {
-                                write_log_entry(file, wallclock, &endpoint_name, &signature)?;
-                            }
+                let wallclock = get_current_timestamp();
+                let elapsed = start_instant.elapsed();
+                let signature = tx.signatures
+                    .first()
+                    .map(|s| bs58::encode(s).into_string())
+                    .unwrap_or_default();
 
-                            let tx_data = TransactionData {
-                                wallclock_secs: wallclock,
-                                elapsed_since_start: elapsed,
-                                start_wallclock_secs,
-                            };
+                if let Some(file) = log_file.as_mut() {
+                    write_log_entry(file, wallclock, &endpoint_name, &signature)?;
+                }
 
-                            let updated = accumulator.record(
-                                signature.clone(),
-                                tx_data.clone(),
-                            );
+                let tx_data = TransactionData {
+                    wallclock_secs: wallclock,
+                    elapsed_since_start: elapsed,
+                    start_wallclock_secs,
+                };
 
-                            if updated
-                                && let Some(envelope) = build_signature_envelope(
-                                    &comparator,
-                                    &endpoint_name,
-                                    &signature,
-                                    tx_data,
-                                    total_producers,
-                                ) {
-                                    if let Some(target) = target_transactions {
-                                        let shared = shared_counter
-                                            .fetch_add(1, Ordering::AcqRel)
-                                            + 1;
-                                        if let Some(tracker) = progress.as_ref() {
-                                            tracker.record(shared);
-                                        }
-                                        if shared >= target
-                                            && !shared_shutdown.swap(true, Ordering::AcqRel)
-                                        {
-                                            info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
-                                            let _ = shutdown_tx.send(());
-                                        }
-                                    }
+                let updated = accumulator.record(signature.clone(), tx_data.clone());
 
-                                    if let Some(sender) = signature_sender.as_ref()
-                                        && let Err(err) = sender.send(envelope).await {
-                                            warn!(endpoint = %endpoint_name, signature = %signature, error = %err, "Failed to queue signature for backend");
-                                        }
-                                }
-
-                            transaction_count += 1;
+                if updated && let Some(envelope) = build_signature_envelope(
+                    &comparator,
+                    &endpoint_name,
+                    &signature,
+                    tx_data,
+                    total_producers,
+                ) {
+                    if let Some(target) = target_transactions {
+                        let shared = shared_counter.fetch_add(1, Ordering::AcqRel) + 1;
+                        if let Some(tracker) = progress.as_ref() {
+                            tracker.record(shared);
+                        }
+                        if shared >= target && !shared_shutdown.swap(true, Ordering::AcqRel) {
+                            info!(endpoint = %endpoint_name, target, "Reached shared signature target; broadcasting shutdown");
+                            let _ = shutdown_tx.send(());
                         }
                     }
+
+                    if let Some(sender) = signature_sender.as_ref() {
+                        enqueue_signature(sender, &endpoint_name, &signature, envelope);
+                    }
+                }
+
+                transaction_count += 1;
             }
         }
     }
