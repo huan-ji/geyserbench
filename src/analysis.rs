@@ -19,9 +19,9 @@ use std::time::Duration;
 
 #[derive(Default)]
 pub struct EndpointStats {
+    pub total_observations: usize,
     pub first_detections: usize,
-    pub total_valid_transactions: usize,
-    pub delays: Vec<f64>,
+    pub delays_ms: Vec<f64>,
     pub backfill_transactions: usize,
 }
 
@@ -42,11 +42,15 @@ pub struct RunSummary {
     pub endpoints: Vec<EndpointSummary>,
     pub fastest_endpoint: Option<String>,
     pub has_data: bool,
+    pub total_signatures: usize,
+    pub backfill_signatures: usize,
 }
 
 pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -> RunSummary {
     let mut endpoint_stats: HashMap<String, EndpointStats> = HashMap::new();
     let expected_producers = endpoint_names.len();
+    let mut total_signatures = 0usize;
+    let mut backfill_signatures = 0usize;
 
     for endpoint_name in endpoint_names {
         endpoint_stats.insert(endpoint_name.clone(), EndpointStats::default());
@@ -64,6 +68,7 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
             .any(|tx| tx.wallclock_secs < tx.start_wallclock_secs);
 
         if is_historical {
+            backfill_signatures += 1;
             for endpoint in sig_data.keys() {
                 if let Some(stats) = endpoint_stats.get_mut(endpoint) {
                     stats.backfill_transactions += 1;
@@ -72,39 +77,35 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
             continue;
         }
 
-        if let Some((first_endpoint, first_tx)) =
+        let Some((first_endpoint, first_tx)) =
             sig_data.iter().min_by_key(|(_, tx)| tx.elapsed_since_start)
-        {
-            if let Some(stats) = endpoint_stats.get_mut(first_endpoint) {
-                stats.first_detections += 1;
-                stats.total_valid_transactions += 1;
-            }
+        else {
+            continue;
+        };
 
-            for (endpoint, tx) in sig_data.iter() {
-                if endpoint != first_endpoint
-                    && let Some(stats) = endpoint_stats.get_mut(endpoint)
-                {
-                    let delay_ms = diff_ms(tx, first_tx);
-                    stats.delays.push(delay_ms);
-                    stats.total_valid_transactions += 1;
+        total_signatures += 1;
+        let first_endpoint_name = first_endpoint.clone();
+
+        for (endpoint, tx) in sig_data.iter() {
+            if let Some(stats) = endpoint_stats.get_mut(endpoint) {
+                stats.total_observations += 1;
+                if endpoint == &first_endpoint_name {
+                    stats.first_detections += 1;
+                    stats.delays_ms.push(0.0);
+                } else {
+                    let delay_ms = diff_ms(tx, first_tx).max(0.0);
+                    stats.delays_ms.push(delay_ms);
                 }
             }
         }
     }
 
-    let total_first_detections: usize = endpoint_stats
-        .values()
-        .map(|stats| stats.first_detections)
-        .sum();
-
     let endpoints: Vec<EndpointSummary> = endpoint_stats
         .into_iter()
-        .map(|(endpoint, stats)| build_summary(endpoint, stats, total_first_detections))
+        .map(|(endpoint, stats)| build_summary(endpoint, stats, total_signatures))
         .collect();
 
-    let has_data = endpoints
-        .iter()
-        .any(|summary| summary.valid_transactions > 0);
+    let has_data = total_signatures > 0;
 
     let fastest_endpoint = endpoints
         .iter()
@@ -116,6 +117,8 @@ pub fn compute_run_summary(comparator: &Comparator, endpoint_names: &[String]) -
         endpoints,
         fastest_endpoint,
         has_data,
+        total_signatures,
+        backfill_signatures,
     }
 }
 
@@ -210,7 +213,11 @@ pub fn build_metrics_report(summary: &RunSummary) -> Value {
         per_endpoint.insert(endpoint.name.clone(), payload);
     }
 
-    json!({ "per_endpoint": per_endpoint })
+    json!({
+        "total_signatures": summary.total_signatures,
+        "backfill_signatures": summary.backfill_signatures,
+        "per_endpoint": per_endpoint
+    })
 }
 
 fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {
@@ -223,22 +230,22 @@ fn diff_ms(tx: &TransactionData, first_tx: &TransactionData) -> f64 {
 fn build_summary(
     endpoint: String,
     stats: EndpointStats,
-    total_first_detections: usize,
+    total_signatures: usize,
 ) -> EndpointSummary {
     let mut summary = EndpointSummary {
         name: endpoint,
-        valid_transactions: stats.total_valid_transactions,
+        valid_transactions: stats.total_observations,
         first_detections: stats.first_detections,
         backfill_transactions: stats.backfill_transactions,
         ..Default::default()
     };
 
-    if total_first_detections > 0 {
-        summary.first_share = stats.first_detections as f64 / total_first_detections as f64;
+    if total_signatures > 0 {
+        summary.first_share = stats.first_detections as f64 / total_signatures as f64;
     }
 
-    if !stats.delays.is_empty() {
-        let mut sorted = stats.delays.clone();
+    if !stats.delays_ms.is_empty() {
+        let mut sorted = stats.delays_ms.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         summary.p50_delay_ms = Some(percentile(&sorted, 0.5));
         summary.p95_delay_ms = Some(percentile(&sorted, 0.95));

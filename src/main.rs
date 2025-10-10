@@ -99,8 +99,8 @@ async fn main() -> Result<()> {
     let start_time_local = get_current_timestamp();
     let comparator = Arc::new(Comparator::new());
     let start_instant = Instant::now();
-    let mut clock_offset_ms = 0.0f64;
-    let mut server_started_at_unix_ms: Option<i64> = None;
+    let clock_offset_ms: f64;
+    let server_started_at_unix_ms: Option<i64>;
     let shared_counter = Arc::new(AtomicUsize::new(0));
     let shared_shutdown = Arc::new(AtomicBool::new(false));
     let aborted = Arc::new(AtomicBool::new(false));
@@ -319,17 +319,6 @@ async fn main() -> Result<()> {
             analysis::display_run_summary(summary);
             let metrics_json = analysis::build_metrics_report(summary);
             debug!(metrics = %metrics_json, "Computed run metrics");
-        }
-
-        if let Some(started_ms) = server_started_at_unix_ms {
-            let server_now_ms = get_current_timestamp() * 1_000.0 + clock_offset_ms;
-            let elapsed_ms = (server_now_ms - started_ms as f64).max(0.0);
-            println!(
-                "Server clock runtime: {:.2}s (offset {:.2}ms, started_at_unix_ms {})",
-                elapsed_ms / 1_000.0,
-                clock_offset_ms,
-                started_ms
-            );
         }
 
         if let Some(run_id) = backend_run_id {
