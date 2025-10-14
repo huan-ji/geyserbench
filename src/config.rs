@@ -27,9 +27,13 @@ pub struct Endpoint {
     pub kind: EndpointKind,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct BackendSettings {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -99,20 +103,20 @@ impl ConfigToml {
     pub fn create_default(path: &str) -> Result<Self> {
         let default_config = ConfigToml {
             config: Config {
-                transactions: 100,
-                account: "pubkey".to_string(),
+                transactions: 1000,
+                account: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA".to_string(),
                 commitment: ArgsCommitment::Processed,
             },
             endpoint: vec![
                 Endpoint {
                     name: "grpc".to_string(),
-                    url: "http://0.0.0.0:10101".to_string(),
+                    url: "http://fra.corvus-labs.io:10101".to_string(),
                     x_token: None,
                     kind: EndpointKind::Yellowstone,
                 },
                 Endpoint {
                     name: "arpc".to_string(),
-                    url: "http://0.0.0.0:20202".to_string(),
+                    url: "http://fra.corvus-labs.io:20202".to_string(),
                     x_token: None,
                     kind: EndpointKind::Arpc,
                 },
