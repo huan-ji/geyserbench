@@ -32,6 +32,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossbeam-queue = "0.3"
 thiserror = "1"
+influxdb2 = "0.5"
+influxdb2-structmap = "0.2"
+chrono = "0.4"
 
 [build-dependencies]
 tonic-prost-build = "0.14"
